@@ -246,7 +246,7 @@ inline CUDA_CALLABLE void adj_tile_lower_solve(
 
     // Raw scratch for the transposed solve L^T W = adj_ret. Cooperative CPU
     // fibers must share this storage across their thread-strided phases.
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     __shared__ T W[n * nrhs];
 #else
     T W_local[WP_TILE_BLOCK_DIM == 1 ? n * nrhs : 1];
@@ -313,7 +313,9 @@ inline CUDA_CALLABLE void adj_tile_lower_solve(
     }
     WP_TILE_SYNC();
 
-#if !defined(__CUDA_ARCH__)
+// HIP device code declares W as a static shared array above, like CUDA; only the CPU path
+// took it from the tile arena.
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
     if constexpr (WP_TILE_BLOCK_DIM > 1)
         tile_shared_storage_t::alloc(-int(sizeof(T) * n * nrhs));
 #endif
