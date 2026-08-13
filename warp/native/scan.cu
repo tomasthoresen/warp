@@ -113,7 +113,7 @@ bool scan_device(
 
     // hipCUB rejects managed memory for temp buffers.
     // Force mempool path even on UMA devices.
-    void* temp_buffer = wp_alloc_device_async(WP_CURRENT_CONTEXT, scan_temp_size, "(native:scan)");
+    void* temp_buffer = wp_alloc_device_async(WP_CURRENT_CONTEXT, scan_temp_size, WP_CURRENT_STREAM, "(native:scan)");
     // wp_alloc_device_async() already records the CUDA error.
     if (scan_temp_size > 0 && !temp_buffer)
         return false;
