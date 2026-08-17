@@ -33,6 +33,7 @@ API
    enable_tiles_in_stack_memory
    enable_vector_component_overwrites
    enable_wide_array_access
+   hip_fast_fp_atomics
    kernel_cache_dir
    launch_array_access_mode
    legacy_cpu_linker

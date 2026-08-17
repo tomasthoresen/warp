@@ -19,10 +19,17 @@
 
 #define THRUST_IGNORE_CUB_VERSION_CHECK
 
+#if defined(__HIP_PLATFORM_AMD__)
+#include "hip_util.h"
+
+#include <hipcub/hipcub.hpp>
+namespace cub = hipcub;
+#else
 #include <cub/device/device_radix_sort.cuh>
 #include <cub/device/device_run_length_encode.cuh>
 #include <cub/device/device_scan.cuh>
 #include <cub/device/device_select.cuh>
+#endif
 
 extern CUcontext get_current_context();
 
@@ -108,11 +115,36 @@ template <typename T, int BlockSize> struct BlockIterator {
         return BlockIterator(ptr + offset * stride, stride);
     }
 
+    // rocPRIM's device_partition forms `it + offset - 1`, which requires
+    // iterator-minus-integer (returning an iterator); CUB never exercised it.
+    CUDA_CALLABLE BlockIterator operator-(difference_type offset) const
+    {
+        return BlockIterator(ptr - offset * stride, stride);
+    }
+
+    CUDA_CALLABLE BlockIterator& operator+=(difference_type offset)
+    {
+        ptr += offset * stride;
+        return *this;
+    }
+
+    CUDA_CALLABLE BlockIterator& operator-=(difference_type offset)
+    {
+        ptr -= offset * stride;
+        return *this;
+    }
+
     CUDA_CALLABLE difference_type operator-(const BlockIterator& other) const { return (ptr - other.ptr) / stride; }
 
     CUDA_CALLABLE bool operator==(const BlockIterator& other) const { return ptr == other.ptr; }
     CUDA_CALLABLE bool operator!=(const BlockIterator& other) const { return ptr != other.ptr; }
 };
+
+template <typename T, int BlockSize>
+CUDA_CALLABLE BlockIterator<T, BlockSize> operator+(ptrdiff_t offset, const BlockIterator<T, BlockSize>& it)
+{
+    return it + offset;
+}
 
 struct BsrColumnIsActive {
     CUDA_CALLABLE bool operator()(const int& col) const { return col >= 0; }
