@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: 2025 Advanced Micro Devices, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -7,7 +8,7 @@
 
 #include "intersect.h"
 
-#ifdef __CUDA_ARCH__
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
 #define BVH_SHARED_STACK 1
 #else
 #define BVH_SHARED_STACK 0
@@ -229,16 +230,20 @@ CUDA_CALLABLE inline void make_node(volatile BVHPackedNodeHalf* n, const vec3& b
     n->b = (unsigned int)(leaf ? 1 : 0);
 }
 
-#ifdef __CUDA_ARCH__
-__device__ inline wp::BVHPackedNodeHalf bvh_load_node(const wp::BVHPackedNodeHalf* nodes, int index)
+CUDA_CALLABLE inline wp::BVHPackedNodeHalf bvh_load_node(const wp::BVHPackedNodeHalf* nodes, int index)
 {
-#ifdef USE_LOAD4
+#if (defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)) && defined(USE_LOAD4)
+    // On NVIDIA __ldg routes through the read-only / texture cache.
+    // On AMD (HIP) __ldg is a no-op (maps to a plain load) since CDNA/RDNA
+    // have no separate read-only cache.  The float4 cast is still valuable:
+    // it guarantees a single 128-bit global-memory transaction per node,
+    // which matches the L2 cache-line granularity on MI250X / MI300X and
+    // avoids partial-line fetches.
     float4 f4 = __ldg((const float4*)(nodes) + index);
     return (const wp::BVHPackedNodeHalf&)f4;
-    // return  (const wp::BVHPackedNodeHalf&)(*((const float4*)(nodes)+index));
 #else
     return nodes[index];
-#endif  // USE_LOAD4
+#endif
 }
 
 // read-only loads for the remaining BVH/mesh query inputs (primitive indices,
@@ -248,21 +253,26 @@ __device__ inline wp::BVHPackedNodeHalf bvh_load_node(const wp::BVHPackedNodeHal
 // candidate bounds into locals up front so the short-circuit overlap test
 // compiles to a single predicate chain instead of a branch per component;
 // the eager loads stay gated to the AABB instantiations because the extra
-// live registers measurably hurt the heavier sphere/capsule instantiations
-__device__ inline int bvh_load_int(const int* data, int index) { return __ldg(data + index); }
-
-__device__ inline vec3 bvh_load_vec3(const vec3* data, int index)
+// live registers measurably hurt the heavier sphere/capsule instantiations.
+// On HIP __ldg maps to a plain load (no separate read-only cache).
+CUDA_CALLABLE inline int bvh_load_int(const int* data, int index)
 {
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+    return __ldg(data + index);
+#else
+    return data[index];
+#endif
+}
+
+CUDA_CALLABLE inline vec3 bvh_load_vec3(const vec3* data, int index)
+{
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     const float* p = reinterpret_cast<const float*>(data + index);
     return vec3(__ldg(p + 0), __ldg(p + 1), __ldg(p + 2));
-}
 #else
-inline wp::BVHPackedNodeHalf bvh_load_node(const wp::BVHPackedNodeHalf* nodes, int index) { return nodes[index]; }
-
-inline int bvh_load_int(const int* data, int index) { return data[index]; }
-
-inline vec3 bvh_load_vec3(const vec3* data, int index) { return data[index]; }
-#endif  // __CUDACC__
+    return data[index];
+#endif
+}
 
 CUDA_CALLABLE inline int clz(int x)
 {
@@ -543,7 +553,6 @@ CUDA_CALLABLE inline bvh_query_t bvh_query_aabb(uint64_t id, const vec3& lower, 
 {
     return bvh_query(id, lower, upper, root);
 }
-
 CUDA_CALLABLE inline bvh_query_t bvh_query_ray(uint64_t id, const vec3& start, const vec3& dir, int root)
 {
     bvh_query_t query = bvh_query(id, start, 1.0f / dir, root);
