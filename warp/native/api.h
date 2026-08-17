@@ -7,7 +7,7 @@
 // Windows consumers leave it undefined so WP_API imports Warp's symbols.
 
 #ifndef WP_API
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
 #define WP_API
 #elif defined(_WIN32)
 #if defined(WP_BUILD_DLL) || defined(WP_NO_CRT)
