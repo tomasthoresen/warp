@@ -313,7 +313,9 @@ template <int DirectionSign, typename Complex, int Ept, typename Fwd, typename T
 inline CUDA_CALLABLE void tile_fft_entry(Fwd fun_forward, int shared_bytes, int batch, Tile& Xinout)
 {
     if constexpr (wp_is_null_func<Fwd>::value) {
-#if !defined(__CUDA_ARCH__)
+// hipcc does not define __CUDA_ARCH__; test for HIP device compilation too so the GPU
+// path is taken on HIP devices (see crt.h and builtin.h).
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
         // Select the sequential or cooperative CPU path at compile time.
         if constexpr (WP_TILE_BLOCK_DIM == 1) {
             tile_fft_cpu_impl<DirectionSign, Complex>(batch, Ept, Xinout.data);
