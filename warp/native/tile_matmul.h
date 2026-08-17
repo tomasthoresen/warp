@@ -61,16 +61,16 @@ template <int PartitionM, int PartitionN, typename Tile> struct partition_t {
     int shape[2];
 };
 
-template <typename Partition> inline int partition_size(const Partition& part) { return part.shape[0] * part.shape[1]; }
+template <typename Partition> CUDA_CALLABLE inline int partition_size(const Partition& part) { return part.shape[0] * part.shape[1]; }
 
 // returns the x, y coordinates of a tile given a linear index
-template <typename Partition> inline void partition_coord(const Partition& part, const int t, int& i, int& j)
+template <typename Partition> CUDA_CALLABLE inline void partition_coord(const Partition& part, const int t, int& i, int& j)
 {
     i = t / part.shape[1];
     j = t % part.shape[1];
 }
 
-template <typename Partition> inline auto partition_load(const Partition& tile, int i, int j)
+template <typename Partition> CUDA_CALLABLE inline auto partition_load(const Partition& tile, int i, int j)
 {
     mat_t<Partition::M, Partition::N, typename Partition::T> out;
 
@@ -89,7 +89,7 @@ template <typename Partition> inline auto partition_load(const Partition& tile, 
 }
 
 template <typename Partition, typename Value>
-inline void partition_store(const Partition& tile, int i, int j, const Value& value)
+CUDA_CALLABLE inline void partition_store(const Partition& tile, int i, int j, const Value& value)
 {
     const int tile_i = Partition::M * i;
     const int tile_j = Partition::N * j;

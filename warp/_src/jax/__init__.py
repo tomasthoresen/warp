@@ -4,6 +4,18 @@
 import warp
 
 
+def _get_jax_gpu_devices(jax):
+    """Return the local Jax GPU devices of this process from whichever GPU backend is loaded (CUDA or ROCm)."""
+    for backend in ("cuda", "rocm", "gpu"):
+        try:
+            devices = jax.local_devices(backend=backend)
+        except Exception:
+            devices = []
+        if devices:
+            return devices
+    return []
+
+
 def device_to_jax(warp_device: warp.DeviceLike):
     """Return the Jax device corresponding to a Warp device.
 
@@ -21,10 +33,13 @@ def device_to_jax(warp_device: warp.DeviceLike):
 
     d = warp.get_device(warp_device)
 
-    try:
-        jax_devices = jax.local_devices(backend="cuda" if d.is_cuda else "cpu")
-    except RuntimeError:
-        jax_devices = []
+    if d.is_cuda:
+        jax_devices = _get_jax_gpu_devices(jax)
+    else:
+        try:
+            jax_devices = jax.local_devices(backend="cpu")
+        except RuntimeError:
+            jax_devices = []
 
     if d.is_cuda:
         for jax_device in jax_devices:
@@ -52,7 +67,7 @@ def device_from_jax(jax_device) -> warp._src.context.Device:
     """
     if jax_device.platform == "cpu":
         return warp.get_device("cpu")
-    elif jax_device.platform == "gpu":
+    elif jax_device.platform in ("gpu", "cuda", "rocm"):
         import jax  # noqa: PLC0415
 
         if jax_device.process_index != jax.process_index() or jax_device.local_hardware_id is None:

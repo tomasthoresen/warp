@@ -637,3 +637,5 @@ def __getattr__(name):
 
 
 __version__ = config.version
+
+from warp._src.uma import ReadbackBuffer as ReadbackBuffer
