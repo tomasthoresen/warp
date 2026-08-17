@@ -250,7 +250,7 @@ static CUfunction apic_get_kernel_function(
     const APICKernel& kernel_info = kern_it->second;
     const std::string& kernel_name = is_forward ? kernel_info.forward_name : kernel_info.backward_name;
     CUfunction kernel;
-    CUresult err = cuModuleGetFunction_f(&kernel, mod_it->second.cuda_module, kernel_name.c_str());
+    CUresult err = cuModuleGetFunction_f(&kernel, (CUmodule)mod_it->second.cuda_module, kernel_name.c_str());
     if (err != CUDA_SUCCESS) {
         wp::set_error_string("Warp APIC error: Failed to get kernel function %s: %d", kernel_name.c_str(), err);
         return nullptr;

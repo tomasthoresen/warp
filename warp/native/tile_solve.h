@@ -224,7 +224,7 @@ template <
     typename AdjTileY,
     typename AdjTileZ,
     typename AdjRet>
-CUDA_CALLABLE void adj_tile_lower_solve(
+inline CUDA_CALLABLE void adj_tile_lower_solve(
     Fwd fun_forward,
     Bkwd fun_bkwd,
     TileL& L,
