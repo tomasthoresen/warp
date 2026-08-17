@@ -164,7 +164,7 @@ inline CUDA_CALLABLE void cooperative_scalar_cholesky_adj(TileA& adj_A, TileOut&
     // Lower: Out(row, col), Upper: Out(col, row)
     auto idx = [](int row, int col) { return Upper ? tile_coord(col, row) : tile_coord(row, col); };
 
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     __shared__ T W1[n * n];
     __shared__ T W2[n * n];
 #else
@@ -259,7 +259,9 @@ inline CUDA_CALLABLE void cooperative_scalar_cholesky_adj(TileA& adj_A, TileOut&
     }
     WP_TILE_SYNC();
 
-#if !defined(__CUDA_ARCH__)
+// HIP device code allocates W1/W2 as static shared arrays above, like CUDA; only the CPU
+// path took them from the tile arena.
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
     if constexpr (WP_TILE_BLOCK_DIM > 1) {
         tile_shared_storage_t::alloc(-int(sizeof(T) * n * n));
         tile_shared_storage_t::alloc(-int(sizeof(T) * n * n));
@@ -505,7 +507,7 @@ template <bool Upper, typename Fwd, typename TileA> CUDA_CALLABLE void tile_chol
 }
 
 template <bool Upper, typename Fwd, typename TileA, typename AdjFwd, typename AdjTileA>
-void adj_tile_cholesky_inplace(Fwd fun_forward, TileA& A, AdjFwd adj_fun_forward, AdjTileA& adj_A)
+inline CUDA_CALLABLE void adj_tile_cholesky_inplace(Fwd fun_forward, TileA& A, AdjFwd adj_fun_forward, AdjTileA& adj_A)
 {
     // MISSINGADJOINT: apply Murray 2016 derivative in place; on entry A holds L
     // (lower) or U (upper), adj_A holds adj_L/adj_U; on exit adj_A holds adj of the original symmetric input
