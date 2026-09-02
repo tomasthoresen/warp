@@ -175,6 +175,8 @@ class TestFuncInline(unittest.TestCase):
         choice, so an ignored attribute would leave no ``.func`` behind. In debug mode nothing is
         inlined anyway and the assertion would hold with or without the attribute.
         """
+        if wp.get_device("cuda:0").is_hip:
+            self.skipTest("PTX inspection is CUDA-only")
         ptx = self._compile_ptx("release")
         defined, called = self._out_of_line(ptx, "kept_out_of_line")
         self.assertTrue(defined, "inline=False helper was inlined away")
@@ -188,6 +190,8 @@ class TestFuncInline(unittest.TestCase):
         compiler would leave the helper out of line unless the attribute is honored. In release
         mode it inlines small helpers anyway and the assertion would hold either way.
         """
+        if wp.get_device("cuda:0").is_hip:
+            self.skipTest("PTX inspection is CUDA-only")
         ptx = self._compile_ptx("debug")
         defined, called = self._out_of_line(ptx, "forced_inline")
         self.assertFalse(defined, "inline=True helper was left out of line")
