@@ -24,7 +24,9 @@ Validation at this base:
     `test_event_external` — ROCm external-event semantics across replayed
     graphs (section below).
   - `matrix/test_mat` `test_inverse_float16` — the 4-ULP fp16 rounding
-    difference documented below; deliberately not widened.
+    difference documented below; deliberately not widened. **Resolved
+    2026-09-08**: the difference came from the HIP build fusing fp16
+    operations that the source rounds separately; see the fp16 note below.
   - `test_apic` `test_save_load_padded_bsr_transpose_cuda_rebuild` and
     `test_save_load_padded_bsr_transpose_too_small` — the
     graph-capture-allocation class.
@@ -507,12 +509,21 @@ pooled full-suite total is not a reliable file-pass metric on this hardware.
     A hypothetical *small* module hitting the same kernel would still crash under
     HIPRTC; set `WARP_HIP_HIPRTC_MAX_SRC_BYTES=0` to force AOT there. Remove once
     the upstream clang bug is fixed. Bug report: `patches/rocm/`.
-- Distinct fp16 note: `test_mat`'s `test_inverse_float16` fails by 4 fp16 ULP,
-  an expected cross-backend rounding difference against the test's `atol=0.05`.
-  Measured 2026-08-04: actual `-31.375` against expected `-31.3125`, an absolute
-  difference of 0.0625 where one ULP is 0.015625 at that magnitude — 0.2 %
-  relative, against a tolerance that allows 3.2 ULP. Left alone rather than
-  widening an upstream tolerance for one backend.
+- Distinct fp16 note: `test_mat`'s `test_inverse_float16` failed by 4 fp16 ULP,
+  at first taken for an expected cross-backend rounding difference against the
+  test's `atol=0.05` (measured 2026-08-04: actual `-31.375` against expected
+  `-31.3125`, where one ULP is 0.015625 at that magnitude). **Resolved
+  2026-09-08.** Warp's `half` computes every operation in float32 and rounds
+  once; the CUDA build converts with inline asm, which the optimizer cannot see
+  through. The HIP build converted with `__float2half_rn`, a plain truncation
+  that LLVM sees through: it turned the chain into native fp16 arithmetic and,
+  under `-ffp-contract=fast`, fused an fp16 multiply into the following add or
+  subtract (`v_fmac_f16`, `v_fma_f16`, `v_pk_fma_f16`) and lowered the fp16
+  division to `v_rcp_f16`, so a 2x2 fp16 determinant came out one ULP off and
+  the inverse and its gradient with it. `float_to_half` on HIP now pins the
+  float32 value with an empty `asm` statement before converting it; HIP kernels
+  round where CUDA kernels do, and the division is the float32 division the
+  source writes.
 
 The 1.12.1 gaps below still apply where the subsystem is unchanged.
 
