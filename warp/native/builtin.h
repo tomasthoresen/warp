@@ -415,6 +415,14 @@ CUDA_CALLABLE inline float bfloat16_to_float(wp_bfloat16 x) { return wp_bfloat16
 // __half2float() matches CUDA's cvt.f32.f16
 CUDA_CALLABLE inline half float_to_half(float x)
 {
+    // Keep the float32 value opaque to the optimizer before it is rounded to half. The CUDA path
+    // converts with inline asm, which the compiler cannot see through, so every half operation
+    // (float32 arithmetic, then one rounding) stays as written. Here __float2half_rn is a plain
+    // fptrunc that LLVM sees through: it turns the float32 arithmetic into native fp16 arithmetic
+    // and, under -ffp-contract=fast, fuses a half multiply into the following half add or
+    // subtract, dropping the intermediate rounding. The empty asm pins x to the rounded float32
+    // result, so the HIP build rounds where the CUDA build does. It emits no instruction.
+    asm("" : "+v"(x));
     half h;
     h.u = __half_as_ushort(__float2half_rn(x));
     return h;
