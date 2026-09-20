@@ -27,13 +27,18 @@ namespace wp {
 // The group size is a property of the algorithm and stays 32 everywhere: the
 // stride-16 bound above is what keeps a 32-lane group correct, so it is not
 // overridable. Only the participation mask is lane-width dependent.
-#define WP_TILE_BITONIC_GROUP_SIZE 32
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_DEVICE_COMPILE__)
-// HIP sync shuffles take a 64-bit participation mask covering the whole wavefront; the group width
-// argument keeps each exchange inside its 32-lane group.
+// HIP: the group is the wavefront. ROCm's sync rules require every lane named in the mask to execute the
+// call, and the fast path below runs on the first WP_TILE_BITONIC_GROUP_SIZE threads only, so a 32-lane
+// group with a full 64-lane mask would break them on gfx9. With the group equal to the wavefront the mask,
+// the width, the loop bound and the thread guard agree on both families (32 lanes on RDNA, 64 on gfx9).
+#define WP_TILE_BITONIC_GROUP_SIZE WP_TILE_WARP_SIZE
 #define WP_TILE_BITONIC_GROUP_MASK WP_TILE_LANE_MASK_ALL
-#elif !defined(WP_TILE_BITONIC_GROUP_MASK)
+#else
+#define WP_TILE_BITONIC_GROUP_SIZE 32
+#ifndef WP_TILE_BITONIC_GROUP_MASK
 #define WP_TILE_BITONIC_GROUP_MASK 0xffffffffu
+#endif
 #endif
 
 struct UintKeyToUint {
