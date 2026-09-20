@@ -185,11 +185,15 @@ upstream in MuJoCo-Warp.
   `capture_begin(external=True)` check on HIP with torch ROCm nightly wheels.
 - **Status:** open.
 
-### Deterministic mode is not bit-reproducible
+### Deterministic mode on HIP
 
-`warp.DeterministicMode.RUN_TO_RUN` / `GPU_TO_GPU` results differ at ULP
-level between runs: the binned-accumulator reduction in `deterministic.cu` is
-not bit-reproducible on gfx1151. Status: open.
+`warp.DeterministicMode.RUN_TO_RUN` / `GPU_TO_GPU` work on HIP. The device-side
+scatter and counter paths in `deterministic.h` are compiled under
+`__HIP_DEVICE_COMPILE__` as well as `__CUDA_ARCH__`, and `RUN_TO_RUN` sums of
+half, bfloat16 and double values take the ordered reduction path, because
+rocPRIM's `reduce_by_key` does not repeat its reduction order for large inputs.
+A very large half, bfloat16 or double sum into a single destination is
+therefore slow; float32 sums keep the binned path. Status: fixed.
 
 ### Tile-path array reduction is slow
 
@@ -333,7 +337,6 @@ Skipped on HIP:
 - `test_graph` graph memory-node tests — no `MemAllocNode` on HIP.
 - `test_apic` loaded-conditional-graph rebuild — needs native conditional
   nodes.
-- `deterministic/` GPU tests — deterministic mode not bit-reproducible.
 - `tile/test_tile_shared_memory` `test_tile_shared_mem_large`,
   `tile/test_tile_view` `test_tile_assign_2d`, `tile/test_tile_reduce` 3D
   axis-reduce backward — exceed 64 KB LDS.
@@ -357,8 +360,6 @@ Skipped on HIP:
 
 Downstream (Newton, MuJoCo-Warp):
 
-- Newton `determinism/test_solver_determinism` particle tests — deterministic
-  mode (section 2).
 - Newton `test_solver_vbd` `test_edge_face_pushes_vertices_out` — the contact
   lands on a face-selection tie of the box SDF; floating-point path
   differences select the other face.
