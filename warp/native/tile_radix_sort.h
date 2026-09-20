@@ -23,12 +23,15 @@ namespace wp {
 // memory, so every shuffle below has a stride of at most 16 and stays inside its
 // group. The overloads below are not full-warp collectives when WP_TILE_WARP_SIZE
 // differs from WP_TILE_BITONIC_GROUP_SIZE.
-#define WP_TILE_BITONIC_GROUP_SIZE 32
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_DEVICE_COMPILE__)
-// HIP sync shuffles take a 64-bit participation mask covering the whole wavefront; the group width
-// argument keeps each exchange inside its 32-lane group.
+// HIP: the group is the wavefront. ROCm's sync rules require every lane named in the mask to execute the
+// call, and the fast path below runs on the first WP_TILE_BITONIC_GROUP_SIZE threads only, so a 32-lane
+// group with a full 64-lane mask would break them on gfx9. With the group equal to the wavefront the mask,
+// the width, the loop bound and the thread guard agree on both families (32 lanes on RDNA, 64 on gfx9).
+#define WP_TILE_BITONIC_GROUP_SIZE WP_TILE_WARP_SIZE
 #define WP_TILE_BITONIC_GROUP_MASK WP_TILE_LANE_MASK_ALL
 #else
+#define WP_TILE_BITONIC_GROUP_SIZE 32
 #define WP_TILE_BITONIC_GROUP_MASK 0xffffffffu
 #endif
 
