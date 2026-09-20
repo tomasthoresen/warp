@@ -494,6 +494,26 @@ void wp_radix_sort_pairs_uint64_device(
     );
 }
 
+#if defined(__HIP_PLATFORM_AMD__)
+// hipCUB's segmented sorts take one iterator type for both offset ranges, so the
+// begin/end choice is a runtime member here instead of a template parameter.
+struct ValidatedSegmentOffsetHip {
+    const int* segment_start_indices;
+    const int* segment_end_indices;
+    int count;
+    bool is_begin;
+
+    __host__ __device__ __forceinline__ int operator()(int segment_index) const
+    {
+        const int start = segment_start_indices[segment_index];
+        const int end = segment_end_indices[segment_index];
+        if (start < 0 || end < start || end > count)
+            return 0;
+        return is_begin ? start : end;
+    }
+};
+#endif
+
 template <bool IsBegin> struct ValidatedSegmentOffset {
     const int* segment_start_indices;
     const int* segment_end_indices;
@@ -516,12 +536,21 @@ template <bool IsBegin> struct ValidatedSegmentOffset {
 auto make_validated_segment_offsets(int* segment_start_indices, int* segment_end_indices, int count)
 {
     auto segment_indices = thrust::make_counting_iterator(0);
+#if defined(__HIP_PLATFORM_AMD__)
+    auto begin_offsets = thrust::make_transform_iterator(
+        segment_indices, ValidatedSegmentOffsetHip { segment_start_indices, segment_end_indices, count, true }
+    );
+    auto end_offsets = thrust::make_transform_iterator(
+        segment_indices, ValidatedSegmentOffsetHip { segment_start_indices, segment_end_indices, count, false }
+    );
+#else
     auto begin_offsets = thrust::make_transform_iterator(
         segment_indices, ValidatedSegmentOffset<true> { segment_start_indices, segment_end_indices, count }
     );
     auto end_offsets = thrust::make_transform_iterator(
         segment_indices, ValidatedSegmentOffset<false> { segment_start_indices, segment_end_indices, count }
     );
+#endif
     return std::make_pair(begin_offsets, end_offsets);
 }
 
