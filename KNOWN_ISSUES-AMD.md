@@ -130,13 +130,29 @@ backend is exactly what caused the graph memory-free crash above.
 - **cuBQL BVH constructor** is CUDA-only (its GPU builder needs CUDA). HIP
   reports `is_cubql_available()` = False and the `"cubql"` Mesh/Bvh constructor
   is gated off; the SAH/median/LBVH constructors are the HIP path.
-- **Deterministic atomics** (`warp.DeterministicMode.RUN_TO_RUN` /
-  `GPU_TO_GPU`) are not yet validated on HIP: the binned-accumulator reduction
-  in `deterministic.cu` does not currently reproduce bit-identical results
-  across runs on gfx1151. The `deterministic/` GPU tests are scoped to non-HIP.
 
 ### Fixed this session
 
+- **Deterministic atomics** (`warp.DeterministicMode.RUN_TO_RUN` /
+  `GPU_TO_GPU`) — the mode was inert on HIP: every device-side scatter and
+  counter function in `deterministic.h` is guarded by `__CUDA_ARCH__`, so HIP
+  device code compiled the fallback macros, which run the plain atomic. The
+  earlier note here blamed the binned accumulator in `deterministic.cu`; that
+  path is reproducible. Three HIP adaptations, CUDA untouched: the device-side
+  path is compiled under `__HIP_DEVICE_COMPILE__` as well, with
+  `is_global_store_target` answered by the `__builtin_amdgcn_is_shared` /
+  `__builtin_amdgcn_is_private` address-space builtins; the scratch buffers of
+  a deterministic launch inside a graph capture are allocated on the capturing
+  stream, because HIP rejects pool allocations on another stream while a
+  capture is active (`hipErrorStreamCaptureUnsupported`); and `RUN_TO_RUN`
+  sums of half, bfloat16 and double values take the ordered reduction path, because
+  rocPRIM's `reduce_by_key` does not repeat its reduction order for large
+  inputs. The ordered path folds each destination sequentially, as
+  `GPU_TO_GPU` does, so a very large half, bfloat16 or double sum into a
+  single destination is slow; float32 sums keep the binned path. The
+  `deterministic/` GPU tests run on HIP; the two conditional-graph cases stay
+  skipped with the conditional graph node gap above, and the bfloat16 case
+  stays skipped by its CUDA architecture gate although the path works.
 - **BVH radix-sort aliasing** (was misfiled as "flaky rocPRIM"; 9 `bvh` + 2
   `mesh_query_aabb` tests) — the HIP `LinearBVHBuilderGPU::build` (`bvh.cu`)
   called the non-DoubleBuffer `cub::DeviceRadixSort::SortPairs(temp, bytes,
@@ -641,12 +657,10 @@ Remaining Newton-on-gfx1151 items:
   rising count identifies the degraded boot state rather than a port defect.
   Related but distinct-signature gfx1151 reports: ROCm/ROCm#6165 (MES ring
   freeze under sustained load), ROCm/TheRock#2684 (HSA_USE_SVM=0 lore).
-- **Run-to-run determinism** — `determinism/test_solver_determinism` fails 3
-  particle tests with ULP-level mismatches (26-32 of 192 elements across
-  runs). This is the documented deterministic-atomics gap above (the
-  `deterministic.cu` binned accumulator is not bit-reproducible on gfx1151);
-  newton's tests exercise the mode unconditionally where warp's own
-  deterministic tests are scoped to non-HIP.
+- **Run-to-run determinism** — `determinism/test_solver_determinism` failed 3
+  particle tests with ULP-level mismatches while deterministic mode was inert
+  on HIP. Resolved with the deterministic-atomics entry under "Fixed this
+  session"; the module passes.
 - **`test_solver_vbd::test_edge_face_pushes_vertices_out_cuda_0`** — fp-marginal
   test geometry, not a port defect. The contact optimizer converges onto the
   box SDF's face-selection tie surface (the deepest-penetration plateau ends
