@@ -1,0 +1,13 @@
+﻿warp.erfcinv
+============
+
+.. function:: warp._src.lang.erfcinv(x: Float) -> Float
+
+   .. hlist::
+      :columns: 8
+
+      * Kernel
+      * Python
+      * Differentiable
+
+   Compute the inverse complementary error function of ``x``.

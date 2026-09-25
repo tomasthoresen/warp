@@ -1,0 +1,13 @@
+﻿warp.atan
+=========
+
+.. function:: warp._src.lang.atan(x: Float) -> Float
+
+   .. hlist::
+      :columns: 8
+
+      * Kernel
+      * Python
+      * Differentiable
+
+   Compute the arctangent of ``x`` in radians.

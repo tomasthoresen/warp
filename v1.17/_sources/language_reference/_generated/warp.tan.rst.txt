@@ -1,0 +1,13 @@
+﻿warp.tan
+========
+
+.. function:: warp._src.lang.tan(x: Float) -> Float
+
+   .. hlist::
+      :columns: 8
+
+      * Kernel
+      * Python
+      * Differentiable
+
+   Compute the tangent of ``x`` in radians.

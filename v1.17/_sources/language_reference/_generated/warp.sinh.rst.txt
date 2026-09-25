@@ -1,0 +1,13 @@
+﻿warp.sinh
+=========
+
+.. function:: warp._src.lang.sinh(x: Float) -> Float
+
+   .. hlist::
+      :columns: 8
+
+      * Kernel
+      * Python
+      * Differentiable
+
+   Compute the sinh of ``x``.

@@ -1,0 +1,13 @@
+﻿warp.cbrt
+=========
+
+.. function:: warp._src.lang.cbrt(x: Float) -> Float
+
+   .. hlist::
+      :columns: 8
+
+      * Kernel
+      * Python
+      * Differentiable
+
+   Compute the cube root of ``x``.

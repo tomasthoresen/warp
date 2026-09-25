@@ -1,0 +1,12 @@
+﻿warp.step
+=========
+
+.. function:: warp._src.lang.step(x: Scalar) -> Scalar
+
+   .. hlist::
+      :columns: 8
+
+      * Kernel
+      * Python
+
+   Compute 1.0 if ``x`` < 0.0, otherwise 0.0.

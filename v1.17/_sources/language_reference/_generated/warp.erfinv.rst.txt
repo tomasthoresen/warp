@@ -1,0 +1,13 @@
+﻿warp.erfinv
+===========
+
+.. function:: warp._src.lang.erfinv(x: Float) -> Float
+
+   .. hlist::
+      :columns: 8
+
+      * Kernel
+      * Python
+      * Differentiable
+
+   Compute the inverse error function of ``x``.

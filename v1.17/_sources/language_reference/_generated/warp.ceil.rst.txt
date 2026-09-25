@@ -1,0 +1,12 @@
+﻿warp.ceil
+=========
+
+.. function:: warp._src.lang.ceil(x: Float) -> Float
+
+   .. hlist::
+      :columns: 8
+
+      * Kernel
+      * Python
+
+   Compute the smallest integer that is greater than or equal to ``x``.

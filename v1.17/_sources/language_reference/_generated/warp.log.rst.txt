@@ -1,0 +1,13 @@
+﻿warp.log
+========
+
+.. function:: warp._src.lang.log(x: Float) -> Float
+
+   .. hlist::
+      :columns: 8
+
+      * Kernel
+      * Python
+      * Differentiable
+
+   Compute the natural logarithm (base-e) of ``x``, where ``x`` is positive.

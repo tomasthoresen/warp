@@ -1,0 +1,13 @@
+﻿warp.sqrt
+=========
+
+.. function:: warp._src.lang.sqrt(x: Float) -> Float
+
+   .. hlist::
+      :columns: 8
+
+      * Kernel
+      * Python
+      * Differentiable
+
+   Compute the square root of ``x``, where ``x`` is positive.
