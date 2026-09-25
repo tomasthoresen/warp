@@ -1006,6 +1006,9 @@ CUDA_CALLABLE inline void texture_assert_sampleable(int32 dtype)
 #if defined(__CUDA_ARCH__)
     printf("texture_sample() does not support 32-bit integer textures\n");
     __trap();
+#elif defined(__HIP_DEVICE_COMPILE__)
+    printf("texture_sample() does not support 32-bit integer textures\n");
+    __builtin_trap();
 #else
     _wp_assert("texture_sample() does not support 32-bit integer textures", __FILE__, unsigned(__LINE__));
 #endif
