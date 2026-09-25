@@ -42,6 +42,19 @@
 #include <unordered_set>
 #include <vector>
 
+#if defined(__HIP_PLATFORM_AMD__)
+// True on success. A failed HIP runtime call also stays pending as the thread's last error, where rocPRIM and
+// Warp's launch checks would read it against unrelated work (see hip_driver_result in cuda_util.cpp); calls
+// whose failure is handled locally go through this so that nothing stays pending.
+static inline bool hip_call_ok(hipError_t result)
+{
+    if (result == hipSuccess)
+        return true;
+    (void)hipGetLastError();
+    return false;
+}
+#endif  // defined(__HIP_PLATFORM_AMD__)
+
 #define check_any(result) (check_generic(result, __FILE__, __LINE__))
 #define check_nvrtc(code) (check_nvrtc_result(code, __FILE__, __LINE__))
 #if !defined(__HIP_PLATFORM_AMD__)
@@ -352,10 +365,10 @@ int cuda_init()
 #if defined(__HIP_PLATFORM_AMD__)
                 g_devices[i].is_ipc_supported = 0;
                 int prev_device = -1;
-                if (hipGetDevice(&prev_device) == hipSuccess) {
-                    if (hipSetDevice(i) == hipSuccess) {
+                if (hip_call_ok(hipGetDevice(&prev_device))) {
+                    if (hip_call_ok(hipSetDevice(i))) {
                         void* ipc_ptr = nullptr;
-                        if (hipMalloc(&ipc_ptr, 4) == hipSuccess) {
+                        if (hip_call_ok(hipMalloc(&ipc_ptr, 4))) {
                             CUipcMemHandle mem_handle;
                             if (cuIpcGetMemHandle_f(&mem_handle, (CUdeviceptr)ipc_ptr) == CUDA_SUCCESS) {
                                 g_devices[i].is_ipc_supported = 1;
@@ -3140,8 +3153,7 @@ int wp_cuda_set_memory_coarse_grain(void* context, void* ptr, size_t size)
         return 0;
 
     int ordinal = wp_cuda_context_get_device_ordinal(context);
-    hipError_t err = hipMemAdvise(ptr, size, hipMemAdviseSetCoarseGrain, ordinal);
-    return err == hipSuccess ? 1 : 0;
+    return hip_call_ok(hipMemAdvise(ptr, size, hipMemAdviseSetCoarseGrain, ordinal)) ? 1 : 0;
 #else
     (void)context;
     (void)ptr;
@@ -3445,8 +3457,16 @@ uint64_t wp_cuda_context_check(void* context)
 
         // synchronize if the stream is not capturing
         if (status == cudaStreamCaptureStatusNone) {
+#if defined(__HIP_PLATFORM_AMD__)
+            // check_cuda() does not leave a failure pending on HIP (see hip_driver_result in
+            // cuda_util.cpp), so take a synchronization failure from the call itself.
+            cudaError_t sync_result = cudaDeviceSynchronize();
+            check_cuda(sync_result);
+            e = sync_result != cudaSuccess ? sync_result : cudaGetLastError();
+#else
             check_cuda(cudaDeviceSynchronize());
             e = cudaGetLastError();
+#endif  // defined(__HIP_PLATFORM_AMD__)
         }
     }
 
@@ -6311,18 +6331,19 @@ bool wp_cuda_configure_kernel_shared_memory(void* kernel, int size)
     // all this function must do: reject requests the device cannot satisfy,
     // matching the driver rejection CUDA produces.
     int static_smem_bytes = 0;
-    if (hipFuncGetAttribute(&static_smem_bytes, HIP_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, (hipFunction_t)kernel)
-        != hipSuccess)
+    if (!hip_call_ok(
+            hipFuncGetAttribute(&static_smem_bytes, HIP_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, (hipFunction_t)kernel)
+        ))
         return false;
 
     int device = -1;
-    if (hipGetDevice(&device) != hipSuccess)
+    if (!hip_call_ok(hipGetDevice(&device)))
         return false;
 
     // Same attribute the device's max_shared_memory_per_block is populated
     // from, so this check and the Python-side shortfall clause agree.
     int max_smem_bytes = 0;
-    if (hipDeviceGetAttribute(&max_smem_bytes, hipDeviceAttributeSharedMemPerBlockOptin, device) != hipSuccess)
+    if (!hip_call_ok(hipDeviceGetAttribute(&max_smem_bytes, hipDeviceAttributeSharedMemPerBlockOptin, device)))
         return false;
 
     return requested_smem_bytes <= max_smem_bytes - static_smem_bytes;
@@ -6351,7 +6372,7 @@ static int get_cuda_kernel_attribute(void* context, void* kernel, int attribute)
     // CUfunction_attribute resolves to a different type than it does in this HIP
     // translation unit, so a call from here compiles but does not link.
     int value = 0;
-    if (hipFuncGetAttribute(&value, (hipFunction_attribute)attribute, (hipFunction_t)kernel) != hipSuccess)
+    if (!hip_call_ok(hipFuncGetAttribute(&value, (hipFunction_attribute)attribute, (hipFunction_t)kernel)))
         return -1;
 #else
     int value = 0;
@@ -6711,8 +6732,9 @@ bool wp_cuda_get_suggested_block_size(
     // translation unit, so a call from here compiles but does not link. Every
     // other use of that wrapper sits in a CUDA-only branch, which is why this is
     // the first place it bites.
-    if (hipFuncGetAttribute(&max_threads_per_block, HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, (hipFunction_t)kernel)
-            == hipSuccess
+    if (hip_call_ok(
+            hipFuncGetAttribute(&max_threads_per_block, HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, (hipFunction_t)kernel)
+        )
         && max_threads_per_block > 0) {
         block_size_limit = max_threads_per_block;
     }
