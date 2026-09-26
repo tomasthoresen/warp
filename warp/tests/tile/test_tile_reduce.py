@@ -1261,6 +1261,9 @@ class TestTileReduce(unittest.TestCase):
         if not supported_archs:
             self.skipTest("NVRTC not available")
         arch = supported_archs[0]
+        if not isinstance(arch, int):
+            # HIP builds report gfx targets and compile with HIPRTC; this test reads NVRTC's diagnostic log
+            self.skipTest("NVRTC diagnostics only (HIP compiles with HIPRTC)")
 
         diagnostic = "dynamic initialization is not supported for a function-scope static __shared__ variable"
 
