@@ -94,7 +94,13 @@ def det_buffer_allocation_scope(device, stream_is_capturing):
         # HIP rejects pool allocations on a non-capturing stream while another stream captures
         # (hipErrorStreamCaptureUnsupported), relaxed capture mode or not, and it has no conditional
         # body graphs to keep allocation-free. Allocate on the capturing stream as plain arrays do.
-        yield
+        # These allocations stand in for CUDA's non-captured ones, so the emulated conditional bodies
+        # (warp._src.context._hip_capture_body) must not count them as body allocations.
+        device._hip_capture_alloc_exempt = getattr(device, "_hip_capture_alloc_exempt", 0) + 1
+        try:
+            yield
+        finally:
+            device._hip_capture_alloc_exempt -= 1
         return
 
     runtime = warp_context.runtime
