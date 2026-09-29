@@ -1045,7 +1045,8 @@ def test_tile_reduce_axis_lengths_33_to_256(test, device, block_dim=TILE_DIM):
     # The 3D (8, 8, 128) axis reduction's backward pass needs ~66 KB of shared
     # memory, which exceeds gfx1151's 64 KB LDS (sm_86 provides 100 KB). Skip
     # the 3D sub-case where it does not fit rather than overflowing LDS.
-    if device.max_shared_memory_per_block < 66 * 1024:
+    device = wp.get_device(device)
+    if device.is_cuda and device.max_shared_memory_per_block < 66 * 1024:
         test.skipTest("3D axis-reduce backward needs >64 KB shared memory (exceeds gfx1151 LDS)")
 
     # 3D sum: axis=2, size 128 (forward and backward)
@@ -1113,7 +1114,8 @@ def test_tile_reduce_axis_lengths_over_256(test, device, block_dim=TILE_DIM):
 
     # The 3D (4, 4, 384) axis reduction's backward pass exceeds gfx1151's 64 KB
     # LDS (sm_86 provides 100 KB). Skip the 3D sub-case where it does not fit.
-    if device.max_shared_memory_per_block < 66 * 1024:
+    device = wp.get_device(device)
+    if device.is_cuda and device.max_shared_memory_per_block < 66 * 1024:
         test.skipTest("3D axis-reduce backward needs >64 KB shared memory (exceeds gfx1151 LDS)")
 
     # 3D sum: axis=2, size 384 (forward and backward)
