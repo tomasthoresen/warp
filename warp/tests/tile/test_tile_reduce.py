@@ -1275,14 +1275,6 @@ def test_tile_reduce_axis_partial_warp_block(test, device):
 
 def test_tile_reduce_axis_lengths_over_256(test, device, block_dim=TILE_DIM):
     """Reduce axes longer than 256 elements across dimensions and gradients."""
-    # KNOWN GAP (HIP/gfx1151): the block-level axis reduction (reduction
-    # dimension > 256, cooperative reduction across the whole block) returns
-    # incorrect results on HIP — the forward reduction reads uninitialized
-    # shared memory. Under investigation; see KNOWN_ISSUES-AMD.md. Tier 1/2
-    # axis reductions and all non-axis reductions are correct.
-    if device.is_hip:
-        test.skipTest("block-level axis reduction over 256 elements is incorrect on HIP (known gap, under investigation)")
-
     # 2D sum: axis=0, size 400 (forward and backward)
     x = wp.ones((400, 16), dtype=float, requires_grad=True, device=device)
     y = wp.zeros(16, dtype=float, requires_grad=True, device=device)
