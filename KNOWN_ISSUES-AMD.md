@@ -486,9 +486,9 @@ backend is exactly what caused the graph memory-free crash above.
   fixed. The `test_tile_cholesky` backward value mismatches (4) are fixed on
   the current base: the tile solve adjoint's scratch memory was declared
   `__shared__` only under `__CUDA_ARCH__`, so the HIP build ran the adjoint on
-  non-shared scratch. Remaining: the Tier 3 block-level axis reduction
-  (reduction dim > 256, skipped with a marker; Tier 1/2 and all non-axis
-  reductions are correct).
+  non-shared scratch. The Tier 3 block-level axis reduction (reduction dim
+  > 256) is correct on HIP since upstream's tiered axis-reduction rewrite; its
+  test runs on HIP.
 - **libmathdx-dependent tile ops** — `test_tile_fft_no_mathdx` and
   `test_tile_cholesky_no_mathdx` exercise the fallback path when NVIDIA
   libmathdx is unavailable; libmathdx is CUDA-only and never present on HIP, so
