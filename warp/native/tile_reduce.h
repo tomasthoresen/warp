@@ -1309,7 +1309,7 @@ template <int Axis, typename Tile> CUDA_CALLABLE auto tile_sum(Tile& t)
 }
 
 // special case adjoint for axis-specific summation
-template <int Axis, typename Tile, typename AdjTile> void adj_tile_sum(Tile& t, Tile& adj_t, AdjTile& adj_ret)
+template <int Axis, typename Tile, typename AdjTile> CUDA_CALLABLE void adj_tile_sum(Tile& t, Tile& adj_t, AdjTile& adj_ret)
 {
     using InputShape = typename Tile::Layout::Shape;
 
