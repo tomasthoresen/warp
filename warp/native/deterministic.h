@@ -56,7 +56,7 @@ enum ErrorCode {
 
 inline CUDA_CALLABLE void report_counter_replay_divergence(det_ctx& ctx, int cursor, int dest_flat_idx, int value)
 {
-#ifdef __CUDA_ARCH__
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     if (ctx.overflow != nullptr) {
         int prev = atomicCAS(ctx.overflow, 0, ERROR_COUNTER_REPLAY_DIVERGENCE);
         if (ctx.debug && prev == 0) {
