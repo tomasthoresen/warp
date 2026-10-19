@@ -189,6 +189,8 @@ def test_load_from_bytes_buffer_types(test, device):
 
 def test_load_from_bytes_ptx_module(test, device):
     """Load PTX file bytes without a trailing NUL; the loader must append it."""
+    if wp.get_device(device).is_hip:
+        test.skipTest("PTX modules are CUDA-only (HIP emits GPU code objects, not PTX)")
     with tempfile.TemporaryDirectory() as tmpdir:
         path = _save_scale_capture(tmpdir, device, kernel=scale_kernel_ptx)
         wrp, modules = _read_capture(path)
