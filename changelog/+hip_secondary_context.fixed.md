@@ -1,0 +1,1 @@
+Fix `wp_cuda_context_create()` on HIP handing back the device's primary context, so that a "secondary" context aliased the device Warp already used and destroying it destroyed the real context. HIP has one context per device; creating a secondary context on HIP now fails with an error, and the capture-release tests that need a second context are skipped on HIP.
