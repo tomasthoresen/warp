@@ -133,6 +133,8 @@ def test_invalid_free_during_capture_reports_error(test, device):
 
 def test_release_other_device_during_capture_keeps_current_device(test, device):
     """Releasing another device's resources during capture must not change the current device."""
+    if wp.get_device(device).is_hip:
+        test.skipTest("HIP has one context per device, so a secondary context cannot be created")
     other = _SecondaryContext(device)
     try:
         with wp.ScopedDevice(device):
@@ -146,6 +148,8 @@ def test_release_other_device_during_capture_keeps_current_device(test, device):
 
 def test_multi_device_graph_release_keeps_current_device(test, device):
     """Destroying a graph that owns another device's allocation must not change the current device."""
+    if wp.get_device(device).is_hip:
+        test.skipTest("HIP has one context per device, so a secondary context cannot be created")
     other = _SecondaryContext(device)
     try:
         with wp.ScopedDevice(device):
@@ -212,6 +216,8 @@ def _notify_graph_destroyed(test, driver, graph):
 
 def test_destroyed_context_discards_queued_releases(test, device):
     """Releases still queued when their context is destroyed must be dropped, except those the context does not own."""
+    if wp.get_device(device).is_hip:
+        test.skipTest("HIP has one context per device, so a secondary context cannot be created")
     driver = _load_cuda_driver()
     if driver is None:
         test.skipTest("CUDA driver library not found")
