@@ -3358,11 +3358,19 @@ void wp_cuda_context_pop_current()
 
 void* wp_cuda_context_create(int device_ordinal)
 {
+#if defined(__HIP_PLATFORM_AMD__)
+    // HIP has one context per device: hipCtxCreate() hands back the device's primary context, so a "new"
+    // context would alias the one Warp already uses for the device, and destroying it would destroy that.
+    (void)device_ordinal;
+    wp::set_error_string("Warp error: HIP has one context per device; a secondary context cannot be created");
+    return NULL;
+#else
     CUcontext ctx = NULL;
     CUdevice device;
     if (check_cu(cuDeviceGet_f(&device, device_ordinal)))
         check_cu(cuCtxCreate_f(&ctx, 0, device));
     return ctx;
+#endif
 }
 
 void wp_cuda_context_destroy(void* context)
