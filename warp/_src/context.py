@@ -4742,7 +4742,9 @@ class Module:
         """Retain source identity and resolved options without reading generated CUDA source."""
         module_name = self.get_module_identifier(block_dim=options["block_dim"])
         output_name = os.path.basename(binary_path)
-        variant = re.fullmatch(rf"{re.escape(module_name)}\.sm{output_arch}(a|f)?\.(ptx|cubin)", output_name)
+        # CUDA binaries carry an optional a/f suffix; HIP binaries carry the gfx name, which may include
+        # target features ("gfx90a:sramecc+:xnack-") and has no variants
+        variant = re.fullmatch(rf"{re.escape(module_name)}\.sm{output_arch}(a|f|gfx[^.]+)?\.(ptx|cubin)", output_name)
         source_path = os.path.join(os.path.dirname(binary_path), module_name + ".cu")
         try:
             source_stat = _apic_source_identity(os.stat(source_path))
@@ -4764,7 +4766,7 @@ class Module:
             "source_path": source_path,
             "source_stat": source_stat,
             "source_filename": os.path.splitext(output_name)[0] + ".cu",
-            "arch_suffix": (variant.group(1) or "") if variant else "",
+            "arch_suffix": _apic_cuda_arch_suffix(variant),
             "fallback_reason": fallback_reason,
             "recipe": {
                 "debug": options["mode"] == "debug",
@@ -14805,6 +14807,12 @@ def _apic_source_identity(source_stat: os.stat_result) -> tuple[int, ...]:
     )
 
 
+def _apic_cuda_arch_suffix(variant) -> str:
+    """The a/f architecture suffix of a matched module binary name; a HIP gfx token has none."""
+    suffix = (variant.group(1) or "") if variant else ""
+    return "" if suffix.startswith("gfx") else suffix
+
+
 def _apic_prepare_cuda_source(info: dict):
     """Validate and retain a CUDA module's source and exact compile recipe for export."""
     from warp._src.apic.types import (  # noqa: PLC0415
@@ -14951,6 +14959,23 @@ def _apic_prepare_cuda_source(info: dict):
     return source_filename, source_data, source_digest, recipe
 
 
+def _apic_target_arch(device: Device) -> int:
+    """The target architecture recorded in a ``.wrp`` for ``device``.
+
+    The format uses 0 for CPU graphs. HIP modules compile with ``arch == 0`` and the gfx name as the
+    architecture suffix, so a HIP device records a non-zero number derived from that name instead
+    (``gfx1151`` -> ``0x1151``); it only has to be non-zero and stable for the device.
+    """
+    if not device.is_cuda:
+        return 0
+    if getattr(device, "is_hip", False):
+        # the gfx name without target features ("gfx90a:sramecc+:xnack-"), read as a hexadecimal number
+        name = device.arch_str[3:].split(":")[0]
+        digits = "".join(ch for ch in name if ch in "0123456789abcdef")
+        return (int(digits, 16) & 0x7FFFFFFF) if digits else 1
+    return device.get_cuda_compile_arch()
+
+
 def capture_save(
     graph: Graph,
     path: str,
@@ -15037,17 +15062,22 @@ def capture_save(
             return s
         return s.encode("utf-8")
 
-    # Register module metadata with C++
+    # Register module metadata with C++. HIP modules compile with arch 0, the format's CPU value, so
+    # they record the device's target architecture instead.
     for module_hash, info in apic_capture.collected_modules.items():
         module_name = info["module_name"]
         binary_filename = info["binary_filename"]
+        if getattr(graph.device, "is_hip", False):
+            module_arch = _apic_target_arch(graph.device)
+        else:
+            module_arch = info["module_exec"].compile_arch if graph.device.is_cuda else 0
 
         runtime.core.wp_apic_register_module(
             state,
             _enc(module_hash),
             _enc(module_name),
             _enc(binary_filename),
-            info["module_exec"].compile_arch if graph.device.is_cuda else 0,
+            module_arch,
         )
 
     # Register kernel metadata
@@ -15197,7 +15227,7 @@ def capture_save(
             if not runtime.core.wp_apic_register_mesh(state, ctypes.c_uint64(mesh_id)):
                 raise RuntimeError(f"APIC: failed to register mesh for capture_save. {runtime.get_error_string()}")
 
-        target_arch = graph.device.get_cuda_compile_arch() if graph.device.is_cuda else 0
+        target_arch = _apic_target_arch(graph.device)
         context = graph.device.context if graph.device.is_cuda else None
         result = runtime.core.wp_apic_state_save(state, staged_wrp_path.encode("utf-8"), target_arch, context)
         if not result:

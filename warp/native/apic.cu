@@ -1153,6 +1153,14 @@ static bool apic_cuda_select_compile_target(
     int device_arch, APICCudaArchSuffix suffix, int& target_arch, bool& use_ptx, std::string& diagnostic
 )
 {
+#if defined(__HIP_PLATFORM_AMD__)
+    // HIPRTC compiles for the device's own gfx target; there is no PTX and no architecture-suffix variant.
+    (void)suffix;
+    (void)diagnostic;
+    target_arch = device_arch;
+    use_ptx = false;
+    return true;
+#else
     int count = 0;
     nvrtcResult result = nvrtcGetNumSupportedArchs(&count);
     if (result != NVRTC_SUCCESS || count <= 0) {
@@ -1219,6 +1227,7 @@ static bool apic_cuda_select_compile_target(
     }
     use_ptx = true;
     return true;
+#endif  // defined(__HIP_PLATFORM_AMD__)
 }
 
 static std::string
@@ -1238,6 +1247,13 @@ apic_cuda_cache_path(const std::string& modules_dir, const APICModule& module, i
     key += std::to_string(nvrtc_major) + "." + std::to_string(nvrtc_minor);
     key.push_back('\0');
     key += std::to_string(target_arch);
+#if defined(__HIP_PLATFORM_AMD__)
+    // the gfx target names the guest binary on HIP (device arch numbers are not populated there)
+    ContextInfo* hip_context_info = get_context_info(get_current_context());
+    const char* hip_arch
+        = (hip_context_info && hip_context_info->device_info) ? hip_context_info->device_info->arch_str : "";
+    key += hip_arch;
+#endif
     key.push_back(static_cast<char>(module.compile_recipe.arch_suffix));
     key.push_back(use_ptx ? 'p' : 'c');
     key.append(
@@ -1249,7 +1265,12 @@ apic_cuda_cache_path(const std::string& modules_dir, const APICModule& module, i
         ? "a"
         : (module.compile_recipe.arch_suffix == APIC_CUDA_ARCH_SUFFIX_F ? "f" : "");
     std::filesystem::path path(modules_dir);
+#if defined(__HIP_PLATFORM_AMD__)
+    (void)suffix;
+    path /= "apic_guest_" + digest + "." + (hip_arch[0] ? hip_arch : "hip") + ".hsaco";
+#else
     path /= "apic_guest_" + digest + ".sm" + std::to_string(target_arch) + suffix + (use_ptx ? ".ptx" : ".cubin");
+#endif
     return path.string();
 }
 

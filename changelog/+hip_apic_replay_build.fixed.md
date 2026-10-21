@@ -1,0 +1,1 @@
+Fix the HIP build of the API-capture replay fallback: the nvPTXCompiler and CUDA JIT paths are CUDA-only, and on HIP a replayed module is loaded as a code object or recompiled with HIPRTC for the current device.
