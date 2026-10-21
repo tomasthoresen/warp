@@ -1244,7 +1244,7 @@ CUDA_CALLABLE inline float texture_coord_scale(int use_normalized_coords, int le
     return use_normalized_coords ? (float)level_dim : ((float)level_dim / (float)base_dim);
 }
 
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
 // Reduce periodic coordinates before scaling to texels so large offsets do not
 // round away the half-texel shift or the reconstructed corner coordinates.
 CUDA_CALLABLE inline float texture_grad_periodic_coord(float coord, int use_normalized_coords, int address_mode)
@@ -1261,7 +1261,7 @@ CUDA_CALLABLE inline float texture_grad_periodic_coord(float coord, int use_norm
 
 // CPU dimensions can approach INT_MAX; a reflected cell and its upper neighbor
 // need wider indices even though every addressed texel lies inside the texture.
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
 using texture_grad_index = int;
 #else
 using texture_grad_index = int64;
@@ -1272,7 +1272,7 @@ using texture_grad_index = int64;
 CUDA_CALLABLE inline texture_grad_index
 texture_grad_cell(float coord, int normalized, int base_dim, int level_dim, int address_mode, float& fraction)
 {
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     // CUDA treats unnormalized WRAP/MIRROR as CLAMP. Normalized periodic
     // coordinates were already reduced by adj_texture_sample().
     if (!normalized && (address_mode == WP_TEXTURE_ADDRESS_WRAP || address_mode == WP_TEXTURE_ADDRESS_MIRROR))
@@ -1290,7 +1290,7 @@ texture_grad_cell(float coord, int normalized, int base_dim, int level_dim, int 
         t = max(-2.0f, min(t, float(level_dim)));
     const float cell = floor(t);
     fraction = t - cell;
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     // Match the CUDA sampler's eight fractional bits on the other axes.
     fraction = rintf(fraction * 256.0f) / 256.0f;
 #endif
@@ -1369,6 +1369,55 @@ CUDA_CALLABLE_DEVICE inline vec4f cuda_texture_grad_fetch_protected(uint64 tex, 
     return cuda_texture_grad_fetch(tex, level, x, y, z);
 }
 
+#elif defined(__HIP_DEVICE_COMPILE__)
+#if defined(WP_TEXTURE_DEVICE_SAMPLING)
+// Integer texel loads at a mip level through the texture object's image
+// descriptor (the object pointer is the descriptor, as in HIP's own texture
+// functions). A HIP 1D array is a 1D image, so each dimension has its own load.
+#if !defined(ADDRESS_SPACE_CONSTANT)
+#define ADDRESS_SPACE_CONSTANT __attribute__((address_space(4)))
+#endif
+extern "C" {
+__device__ float4::Native_vec_ __ockl_image_load_lod_1D(unsigned int ADDRESS_SPACE_CONSTANT* i, int c, int l);
+__device__ float4::Native_vec_
+__ockl_image_load_lod_2D(unsigned int ADDRESS_SPACE_CONSTANT* i, int2::Native_vec_ c, int l);
+__device__ float4::Native_vec_
+__ockl_image_load_lod_3D(unsigned int ADDRESS_SPACE_CONSTANT* i, int4::Native_vec_ c, int l);
+}
+
+CUDA_CALLABLE_DEVICE inline unsigned int ADDRESS_SPACE_CONSTANT* hip_texture_image(uint64 tex)
+{
+    return (unsigned int ADDRESS_SPACE_CONSTANT*)wp_texture_object(tex);
+}
+
+CUDA_CALLABLE_DEVICE inline vec4f hip_texture_grad_fetch(uint64 tex, int level, int x)
+{
+    const float4::Native_vec_ v = __ockl_image_load_lod_1D(hip_texture_image(tex), x, level);
+    return vec4f(v.x, v.y, v.z, v.w);
+}
+
+CUDA_CALLABLE_DEVICE inline vec4f hip_texture_grad_fetch(uint64 tex, int level, int x, int y)
+{
+    const int2::Native_vec_ c = { x, y };
+    const float4::Native_vec_ v = __ockl_image_load_lod_2D(hip_texture_image(tex), c, level);
+    return vec4f(v.x, v.y, v.z, v.w);
+}
+
+CUDA_CALLABLE_DEVICE inline vec4f hip_texture_grad_fetch(uint64 tex, int level, int x, int y, int z)
+{
+    const int4::Native_vec_ c = { x, y, z, 0 };
+    const float4::Native_vec_ v = __ockl_image_load_lod_3D(hip_texture_image(tex), c, level);
+    return vec4f(v.x, v.y, v.z, v.w);
+}
+#else
+// No image hardware: texture creation fails on the host, so this is never reached.
+CUDA_CALLABLE_DEVICE inline vec4f hip_texture_grad_fetch(uint64 tex, int level, int x) { return vec4f(); }
+CUDA_CALLABLE_DEVICE inline vec4f hip_texture_grad_fetch(uint64 tex, int level, int x, int y) { return vec4f(); }
+CUDA_CALLABLE_DEVICE inline vec4f hip_texture_grad_fetch(uint64 tex, int level, int x, int y, int z) { return vec4f(); }
+#endif
+#endif
+
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
 // Integer fetches do not apply periodic or border addressing. CUDA texture
 // dimensions are hardware-bounded, so their indices and periods fit in int32.
 CUDA_CALLABLE_DEVICE inline int cuda_texture_grad_index(int index, int size, int mode, int normalized)
@@ -1412,6 +1461,12 @@ template <typename T> CUDA_CALLABLE inline T texture_grad_texel(const texture1d_
     if (x < 0 || x >= width)
         return texture_sample_helper<T>::zero();
     return texture_grad_components<T>(cuda_texture_grad_fetch_protected(tex.tex, level, x, 0));
+#elif defined(__HIP_DEVICE_COMPILE__)
+    const int width = texture_mip_dim(tex.width, level);
+    x = cuda_texture_grad_index(x, width, tex.get_address_mode_u(), tex.get_use_normalized_coords());
+    if (x < 0 || x >= width)
+        return texture_sample_helper<T>::zero();
+    return texture_grad_components<T>(hip_texture_grad_fetch(tex.tex, level, x));
 #else
     return cpu_texture_grad_texel<T>((const Texture*)tex.tex, level, x);
 #endif
@@ -1428,6 +1483,14 @@ CUDA_CALLABLE inline T texture_grad_texel(const texture2d_t& tex, int level, tex
     if (x < 0 || x >= width || y < 0 || y >= height)
         return texture_sample_helper<T>::zero();
     return texture_grad_components<T>(cuda_texture_grad_fetch_protected(tex.tex, level, x, y));
+#elif defined(__HIP_DEVICE_COMPILE__)
+    const int width = texture_mip_dim(tex.width, level);
+    const int height = texture_mip_dim(tex.height, level);
+    x = cuda_texture_grad_index(x, width, tex.get_address_mode_u(), tex.get_use_normalized_coords());
+    y = cuda_texture_grad_index(y, height, tex.get_address_mode_v(), tex.get_use_normalized_coords());
+    if (x < 0 || x >= width || y < 0 || y >= height)
+        return texture_sample_helper<T>::zero();
+    return texture_grad_components<T>(hip_texture_grad_fetch(tex.tex, level, x, y));
 #else
     return cpu_texture_grad_texel<T>((const Texture*)tex.tex, level, x, y);
 #endif
@@ -1447,6 +1510,16 @@ texture_grad_texel(const texture3d_t& tex, int level, texture_grad_index x, text
     if (x < 0 || x >= width || y < 0 || y >= height || z < 0 || z >= depth)
         return texture_sample_helper<T>::zero();
     return texture_grad_components<T>(cuda_texture_grad_fetch_protected(tex.tex, level, x, y, z));
+#elif defined(__HIP_DEVICE_COMPILE__)
+    const int width = texture_mip_dim(tex.width, level);
+    const int height = texture_mip_dim(tex.height, level);
+    const int depth = texture_mip_dim(tex.depth, level);
+    x = cuda_texture_grad_index(x, width, tex.get_address_mode_u(), tex.get_use_normalized_coords());
+    y = cuda_texture_grad_index(y, height, tex.get_address_mode_v(), tex.get_use_normalized_coords());
+    z = cuda_texture_grad_index(z, depth, tex.get_address_mode_w(), tex.get_use_normalized_coords());
+    if (x < 0 || x >= width || y < 0 || y >= height || z < 0 || z >= depth)
+        return texture_sample_helper<T>::zero();
+    return texture_grad_components<T>(hip_texture_grad_fetch(tex.tex, level, x, y, z));
 #else
     return cpu_texture_grad_texel<T>((const Texture*)tex.tex, level, x, y, z);
 #endif
@@ -1643,7 +1716,7 @@ CUDA_CALLABLE void adj_texture_sample(
     if (tex.tex == 0)
         return;
 
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     u = texture_grad_periodic_coord(u, tex.get_use_normalized_coords(), tex.get_address_mode_u());
 #endif
 
@@ -1698,7 +1771,7 @@ CUDA_CALLABLE void adj_texture_sample(
     if (tex.tex == 0)
         return;
 
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     u = texture_grad_periodic_coord(u, tex.get_use_normalized_coords(), tex.get_address_mode_u());
     v = texture_grad_periodic_coord(v, tex.get_use_normalized_coords(), tex.get_address_mode_v());
 #endif
@@ -1771,7 +1844,7 @@ CUDA_CALLABLE void adj_texture_sample(
     if (tex.tex == 0)
         return;
 
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     u = texture_grad_periodic_coord(u, tex.get_use_normalized_coords(), tex.get_address_mode_u());
     v = texture_grad_periodic_coord(v, tex.get_use_normalized_coords(), tex.get_address_mode_v());
     w = texture_grad_periodic_coord(w, tex.get_use_normalized_coords(), tex.get_address_mode_w());
