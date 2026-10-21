@@ -1,0 +1,1 @@
+Fix `texture_sample()` on HIP for normalized WRAP and MIRROR coordinates of large magnitude, which could select a neighbouring texel on non-power-of-two texture sizes: the coordinates are reduced to one period before sampling.
