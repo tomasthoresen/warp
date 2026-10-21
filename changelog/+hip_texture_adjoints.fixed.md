@@ -1,0 +1,1 @@
+Fix kernels that differentiate `texture_sample()` on HIP: the adjoint code took the CPU sampler's path in device compiles, which failed to compile. HIP device compiles now follow the texture unit's semantics and read texels through integer image loads.
