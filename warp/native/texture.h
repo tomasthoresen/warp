@@ -1154,14 +1154,46 @@ texture_sample_divergent(const texture3d_t& tex, float u, float v, float w, floa
 #endif
 
 // 1D texture sampling with scalar coordinate
+#if defined(__HIP_DEVICE_COMPILE__)
+// The texture unit wraps normalized coordinates of large magnitude imprecisely
+// for non-power-of-two sizes, where CUDA's computes the fractional part exactly.
+// Reduce periodic normalized coordinates first so a large coordinate samples
+// the texel of its bounded equivalent. The reduced value stays below the
+// period: a tiny negative coordinate would otherwise round up to the period
+// itself, which the sampler wraps to the first texel instead of the last.
+// Non-finite coordinates pass unchanged.
+CUDA_CALLABLE_DEVICE inline float hip_texture_periodic_coord(float coord, int use_normalized_coords, int address_mode)
+{
+    if (use_normalized_coords && isfinite(coord)) {
+        if (address_mode == WP_TEXTURE_ADDRESS_WRAP) {
+            const float t = coord - floor(coord);
+            return t < 1.0f ? t : 0.99999994f;
+        }
+        if (address_mode == WP_TEXTURE_ADDRESS_MIRROR) {
+            const float t = coord - 2.0f * floor(coord * 0.5f);
+            return t < 2.0f ? t : 1.9999999f;
+        }
+    }
+    return coord;
+}
+#endif
+
 template <typename T> CUDA_CALLABLE T texture_sample(const texture1d_t& tex, float u, float lod)
 {
+#if defined(__HIP_DEVICE_COMPILE__)
+    u = hip_texture_periodic_coord(u, tex.get_use_normalized_coords(), tex.get_address_mode_u());
+#endif
     return texture_sample_helper<T>::sample_1d(tex, u, lod);
 }
 
 // 2D texture sampling with vec2 coordinates
 template <typename T> CUDA_CALLABLE T texture_sample(const texture2d_t& tex, const vec2f& uv, float lod)
 {
+#if defined(__HIP_DEVICE_COMPILE__)
+    const float u = hip_texture_periodic_coord(uv[0], tex.get_use_normalized_coords(), tex.get_address_mode_u());
+    const float v = hip_texture_periodic_coord(uv[1], tex.get_use_normalized_coords(), tex.get_address_mode_v());
+    return texture_sample_helper<T>::sample_2d(tex, u, v, lod);
+#endif
 #if defined(WP_WORKAROUND_CUDA_TEXTURE_CUBIN)
     if (!texture_handle_is_uniform(tex.tex))
         return texture_sample_divergent<T>(tex, uv[0], uv[1], lod);
@@ -1172,6 +1204,10 @@ template <typename T> CUDA_CALLABLE T texture_sample(const texture2d_t& tex, con
 // 2D texture sampling with separate u, v coordinates
 template <typename T> CUDA_CALLABLE T texture_sample(const texture2d_t& tex, float u, float v, float lod)
 {
+#if defined(__HIP_DEVICE_COMPILE__)
+    u = hip_texture_periodic_coord(u, tex.get_use_normalized_coords(), tex.get_address_mode_u());
+    v = hip_texture_periodic_coord(v, tex.get_use_normalized_coords(), tex.get_address_mode_v());
+#endif
 #if defined(WP_WORKAROUND_CUDA_TEXTURE_CUBIN)
     if (!texture_handle_is_uniform(tex.tex))
         return texture_sample_divergent<T>(tex, u, v, lod);
@@ -1182,6 +1218,12 @@ template <typename T> CUDA_CALLABLE T texture_sample(const texture2d_t& tex, flo
 // 3D texture sampling with vec3 coordinates
 template <typename T> CUDA_CALLABLE T texture_sample(const texture3d_t& tex, const vec3f& uvw, float lod)
 {
+#if defined(__HIP_DEVICE_COMPILE__)
+    const float u = hip_texture_periodic_coord(uvw[0], tex.get_use_normalized_coords(), tex.get_address_mode_u());
+    const float v = hip_texture_periodic_coord(uvw[1], tex.get_use_normalized_coords(), tex.get_address_mode_v());
+    const float w = hip_texture_periodic_coord(uvw[2], tex.get_use_normalized_coords(), tex.get_address_mode_w());
+    return texture_sample_helper<T>::sample_3d(tex, u, v, w, lod);
+#endif
 #if defined(WP_WORKAROUND_CUDA_TEXTURE_CUBIN)
     if (!texture_handle_is_uniform(tex.tex))
         return texture_sample_divergent<T>(tex, uvw[0], uvw[1], uvw[2], lod);
@@ -1192,6 +1234,11 @@ template <typename T> CUDA_CALLABLE T texture_sample(const texture3d_t& tex, con
 // 3D texture sampling with separate u, v, w coordinates
 template <typename T> CUDA_CALLABLE T texture_sample(const texture3d_t& tex, float u, float v, float w, float lod)
 {
+#if defined(__HIP_DEVICE_COMPILE__)
+    u = hip_texture_periodic_coord(u, tex.get_use_normalized_coords(), tex.get_address_mode_u());
+    v = hip_texture_periodic_coord(v, tex.get_use_normalized_coords(), tex.get_address_mode_v());
+    w = hip_texture_periodic_coord(w, tex.get_use_normalized_coords(), tex.get_address_mode_w());
+#endif
 #if defined(WP_WORKAROUND_CUDA_TEXTURE_CUBIN)
     if (!texture_handle_is_uniform(tex.tex))
         return texture_sample_divergent<T>(tex, u, v, w, lod);
