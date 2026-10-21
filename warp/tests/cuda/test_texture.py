@@ -4046,15 +4046,19 @@ def test_texture_sample_grad_periodic_coordinates(test, device):
     )
     for ndim, (texture_type, position_type, kernel) in enumerate(cases, start=1):
         for axis in range(ndim):
+            case_size = size
+            if ndim == 3 and axis == 2 and getattr(wp.get_device(device), "is_hip", False):
+                # HIP 3D textures hold at most 8192 slices
+                case_size = 8192
             shape = [4] * ndim
-            shape[ndim - axis - 1] = size
+            shape[ndim - axis - 1] = case_size
             ramp_shape = [1] * ndim
-            ramp_shape[ndim - axis - 1] = size
-            data = np.broadcast_to((np.arange(size, dtype=np.float32) % 4).reshape(ramp_shape), shape).copy()
+            ramp_shape[ndim - axis - 1] = case_size
+            data = np.broadcast_to((np.arange(case_size, dtype=np.float32) % 4).reshape(ramp_shape), shape).copy()
             for mode in (wp.TextureAddressMode.WRAP, wp.TextureAddressMode.MIRROR):
                 modes = [wp.TextureAddressMode.CLAMP] * ndim
                 modes[axis] = mode
-                for num_levels, level, slope in ((1, -1.0, -3.0 * size), (3, 0.5, -2.0 * size)):
+                for num_levels, level, slope in ((1, -1.0, -3.0 * case_size), (3, 0.5, -2.0 * case_size)):
                     with test.subTest(ndim=ndim, axis=axis, mode=mode, lod=level):
                         tex = texture_type(
                             data,
