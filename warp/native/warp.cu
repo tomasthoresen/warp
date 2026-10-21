@@ -17,6 +17,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 
 #if !defined(__HIP_PLATFORM_AMD__)
@@ -5471,6 +5472,103 @@ static void append_common_nvrtc_compile_options(
     options.push_back("--diag-suppress=177,550");  // "was declared but never referenced", "was set but never used"
 }
 
+#if defined(__HIP_PLATFORM_AMD__)
+// The HIPRTC options shared by every HIP module compile: wp_cuda_compile_program() and the API-capture
+// replay fallback. Architecture and include options are added by the caller.
+static void append_hiprtc_compile_options(
+    std::vector<std::string>& stored_options,
+    bool debug,
+    int optimization_level,
+    bool verify_fp,
+    bool fast_math,
+    bool fuse_fp,
+    bool lineinfo
+)
+{
+    stored_options.push_back("--std=c++17");
+
+    // HIP: prevent hipRTC optimizer from hanging on deeply-nested template
+    // instantiations (e.g. hipcub::DeviceReduce, Newton VBD solver kernels).
+    // Without these flags, hipRTC can stall for 30+ minutes on a single kernel.
+    // Matches the flags used in the AOT build path (build_dll.py hip_fp_flags).
+    stored_options.push_back("-fno-finite-math-only");
+    stored_options.push_back("-fno-associative-math");
+    stored_options.push_back("-fno-reciprocal-math");
+    stored_options.push_back("-fno-strict-aliasing");
+
+    // Disable RDNA3.5 "true16" 16-bit register mode. ROCm 7.2's AMDGPU backend
+    // misallocates the _hi16/_lo16 subregisters it produces for packed
+    // float16/bfloat16 code, failing at -O2/-O3 with "Illegal instruction:
+    // Operand has incorrect register class" on kernels that mix half-precision
+    // vector/matrix ops (e.g. test_vec_scalar_ops). Forcing 16-bit ops through
+    // 32-bit registers avoids the buggy allocation; the AOT build passes the
+    // same flag (build_dll.py).
+    stored_options.push_back("-Xclang");
+    stored_options.push_back("-target-feature");
+    stored_options.push_back("-Xclang");
+    stored_options.push_back("-real-true16");
+
+    if (debug) {
+        stored_options.push_back("-O0");
+        stored_options.push_back("-g");
+    } else if (optimization_level >= 0) {
+        stored_options.push_back(std::string("-O") + std::to_string(optimization_level));
+    }
+
+    if (!debug) {
+        // Match NVRTC (and the warp_rocm port): define NDEBUG in release mode.
+        // Without it, device-side assert() in array.h/builtin.h stays live in
+        // every JIT kernel: ~3.3x larger code objects and ~2x slower simulation
+        // kernels measured on gfx1151 (mujoco-warp humanoid at 1024 worlds).
+        stored_options.push_back("-DNDEBUG");
+    }
+
+    // Enable the floating-point verification checks (array.h/builtin.h FP_CHECK)
+    // when requested, matching the NVRTC path (--define-macro=WP_VERIFY_FP). The
+    // checks printf on non-finite values; their assert(0) is a no-op under NDEBUG.
+    if (verify_fp)
+        stored_options.push_back("-DWP_VERIFY_FP");
+
+    if (fast_math)
+        stored_options.push_back("-ffast-math");
+
+    // clang's HIP default already contracts (fast-honor-pragmas), so fuse_fp=false has to say so
+    // explicitly to match --fmad=false on CUDA.
+    if (fuse_fp)
+        stored_options.push_back("-ffp-contract=fast");
+    else
+        stored_options.push_back("-ffp-contract=off");
+
+    if (lineinfo)
+        stored_options.push_back("-gline-tables-only");
+}
+
+// The system include directories the Python build passes to every HIPRTC compile (warp/_src/build.py):
+// the ROCm headers and the GCC headers (<stddef.h>, <float.h>, ...), which HIPRTC does not bundle.
+static void append_hiprtc_system_include_options(std::vector<std::string>& stored_options)
+{
+    const char* rocm_path = getenv("ROCM_PATH");
+    stored_options.push_back(std::string("-I") + ((rocm_path && rocm_path[0]) ? rocm_path : "/opt/rocm") + "/include");
+    // the newest GCC version directory (numeric, so 13 ranks above 9)
+    std::string gcc_include = "/usr/lib/gcc/x86_64-linux-gnu/13/include";
+    long newest_version = -1;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator("/usr/lib/gcc/x86_64-linux-gnu", ec)) {
+        const std::string name = entry.path().filename().string();
+        char* end = nullptr;
+        const long version = strtol(name.c_str(), &end, 10);
+        if (end == name.c_str() || *end != '\0')
+            continue;
+        const std::string candidate = entry.path().string() + "/include";
+        if (version > newest_version && std::filesystem::is_directory(candidate, ec)) {
+            newest_version = version;
+            gcc_include = candidate;
+        }
+    }
+    stored_options.push_back("-I" + gcc_include);
+}
+#endif  // defined(__HIP_PLATFORM_AMD__)
+
 size_t wp_cuda_compile_program(
     const char* cuda_src,
     const char* program_name,
@@ -5523,106 +5621,21 @@ size_t wp_cuda_compile_program(
     std::vector<std::string> stored_options;
     std::vector<const char*> opts;
 
-    // Reserve enough space to prevent vector reallocation which would invalidate c_str() pointers
-    stored_options.reserve(20 + num_cuda_include_dirs);
-
-    if (arch_suffix && arch_suffix[0]) {
+    if (arch_suffix && arch_suffix[0])
         stored_options.push_back(std::string("--gpu-architecture=") + arch_suffix);
-        opts.push_back(stored_options.back().c_str());
-    }
 
-    if (include_dir && include_dir[0]) {
+    if (include_dir && include_dir[0])
         stored_options.push_back(std::string("-I") + include_dir);
-        opts.push_back(stored_options.back().c_str());
-    }
 
     for (int i = 0; i < num_cuda_include_dirs; ++i) {
-        if (cuda_include_dirs && cuda_include_dirs[i]) {
+        if (cuda_include_dirs && cuda_include_dirs[i])
             stored_options.push_back(std::string("-I") + cuda_include_dirs[i]);
-            opts.push_back(stored_options.back().c_str());
-        }
     }
 
-    stored_options.push_back("--std=c++17");
-    opts.push_back(stored_options.back().c_str());
-
-    // HIP: prevent hipRTC optimizer from hanging on deeply-nested template
-    // instantiations (e.g. hipcub::DeviceReduce, Newton VBD solver kernels).
-    // Without these flags, hipRTC can stall for 30+ minutes on a single kernel.
-    // Matches the flags used in the AOT build path (build_dll.py hip_fp_flags).
-    stored_options.push_back("-fno-finite-math-only");
-    opts.push_back(stored_options.back().c_str());
-    stored_options.push_back("-fno-associative-math");
-    opts.push_back(stored_options.back().c_str());
-    stored_options.push_back("-fno-reciprocal-math");
-    opts.push_back(stored_options.back().c_str());
-    stored_options.push_back("-fno-strict-aliasing");
-    opts.push_back(stored_options.back().c_str());
-
-#if defined(__HIP_PLATFORM_AMD__)
-    // Disable RDNA3.5 "true16" 16-bit register mode. ROCm 7.2's AMDGPU backend
-    // misallocates the _hi16/_lo16 subregisters it produces for packed
-    // float16/bfloat16 code, failing at -O2/-O3 with "Illegal instruction:
-    // Operand has incorrect register class" on kernels that mix half-precision
-    // vector/matrix ops (e.g. test_vec_scalar_ops). Forcing 16-bit ops through
-    // 32-bit registers avoids the buggy allocation; the AOT build passes the
-    // same flag (build_dll.py).
-    stored_options.push_back("-Xclang");
-    opts.push_back(stored_options.back().c_str());
-    stored_options.push_back("-target-feature");
-    opts.push_back(stored_options.back().c_str());
-    stored_options.push_back("-Xclang");
-    opts.push_back(stored_options.back().c_str());
-    stored_options.push_back("-real-true16");
-    opts.push_back(stored_options.back().c_str());
-#endif  // defined(__HIP_PLATFORM_AMD__)
-
-    if (debug) {
-        stored_options.push_back("-O0");
-        opts.push_back(stored_options.back().c_str());
-        stored_options.push_back("-g");
-        opts.push_back(stored_options.back().c_str());
-    } else if (optimization_level >= 0) {
-        stored_options.push_back(std::string("-O") + std::to_string(optimization_level));
-        opts.push_back(stored_options.back().c_str());
-    }
-
-    if (!debug) {
-        // Match NVRTC (and the warp_rocm port): define NDEBUG in release mode.
-        // Without it, device-side assert() in array.h/builtin.h stays live in
-        // every JIT kernel: ~3.3x larger code objects and ~2x slower simulation
-        // kernels measured on gfx1151 (mujoco-warp humanoid at 1024 worlds).
-        stored_options.push_back("-DNDEBUG");
-        opts.push_back(stored_options.back().c_str());
-    }
-
-    // Enable the floating-point verification checks (array.h/builtin.h FP_CHECK)
-    // when requested, matching the NVRTC path (--define-macro=WP_VERIFY_FP). The
-    // checks printf on non-finite values; their assert(0) is a no-op under NDEBUG.
-    if (verify_fp) {
-        stored_options.push_back("-DWP_VERIFY_FP");
-        opts.push_back(stored_options.back().c_str());
-    }
-
-    if (fast_math) {
-        stored_options.push_back("-ffast-math");
-        opts.push_back(stored_options.back().c_str());
-    }
-
-    // clang's HIP default already contracts (fast-honor-pragmas), so fuse_fp=false has to say so
-    // explicitly to match --fmad=false on CUDA.
-    if (fuse_fp) {
-        stored_options.push_back("-ffp-contract=fast");
-        opts.push_back(stored_options.back().c_str());
-    } else {
-        stored_options.push_back("-ffp-contract=off");
-        opts.push_back(stored_options.back().c_str());
-    }
-
-    if (lineinfo) {
-        stored_options.push_back("-gline-tables-only");
-        opts.push_back(stored_options.back().c_str());
-    }
+    append_hiprtc_compile_options(stored_options, debug, optimization_level, verify_fp, fast_math, fuse_fp, lineinfo);
+    // the option strings are complete now, so their c_str() pointers stay valid
+    for (const std::string& option : stored_options)
+        opts.push_back(option.c_str());
 
     if (verbose) {
         fprintf(stdout, "HIPRTC options:\n");
@@ -6271,6 +6284,7 @@ bool wp_cuda_compile_solver(
 
 #endif
 
+#if !defined(__HIP_PLATFORM_AMD__)
 static const char* apic_nvptx_error_string(nvPTXCompileResult result)
 {
     switch (result) {
@@ -6294,6 +6308,7 @@ static const char* apic_nvptx_error_string(nvPTXCompileResult result)
         return "unknown error";
     }
 }
+#endif  // !defined(__HIP_PLATFORM_AMD__)
 
 static std::string apic_cuda_error_string(CUresult result)
 {
@@ -6311,8 +6326,21 @@ static std::string apic_cuda_error_string(CUresult result)
 
 // Load PTX or CUBIN bytes without printing. APIC uses this primitive to try
 // packaged and cached candidates before reporting one combined diagnostic.
+#if defined(__HIP_PLATFORM_AMD__)
+// apic_internal.h declares APICModule::cuda_module as void* when __CUDACC__ is not defined, which is the case
+// under hipcc; the loader takes that type so the call sites compile unchanged.
+typedef void* APICCudaModuleHandle;
+#else
+typedef CUmodule APICCudaModuleHandle;
+#endif
+
 static bool apic_cuda_load_module_data(
-    void* context, const uint8_t* data, size_t size, bool load_ptx, CUmodule* module, std::string& diagnostic
+    void* context,
+    const uint8_t* data,
+    size_t size,
+    bool load_ptx,
+    APICCudaModuleHandle* module,
+    std::string& diagnostic
 )
 {
     if (!data || size == 0 || !module) {
@@ -6323,6 +6351,19 @@ static bool apic_cuda_load_module_data(
     ContextGuard guard(context);
     *module = nullptr;
 
+#if defined(__HIP_PLATFORM_AMD__)
+    // HIP loads code objects only; a PTX module recorded on a CUDA host cannot be loaded here.
+    if (load_ptx) {
+        diagnostic = "PTX modules cannot be loaded on HIP";
+        return false;
+    }
+    CUresult result = cuModuleLoadDataEx_f(reinterpret_cast<CUmodule*>(module), data, 0, nullptr, nullptr);
+    if (result != CUDA_SUCCESS) {
+        diagnostic = apic_cuda_error_string(result);
+        return false;
+    }
+    return true;
+#else
     std::vector<uint8_t> terminated_input;
     const void* input = data;
     size_t input_size = size;
@@ -6412,6 +6453,7 @@ static bool apic_cuda_load_module_data(
         return false;
     }
     return true;
+#endif  // defined(__HIP_PLATFORM_AMD__)
 }
 
 // Compile generated Warp CUDA source to memory with the semantic options
@@ -6438,6 +6480,29 @@ static bool apic_cuda_compile_program_to_memory(
         return false;
     }
 
+#if defined(__HIP_PLATFORM_AMD__)
+    // HIP has no PTX and no sm_ numbering: compile a code object for the current device's gfx target with
+    // the options every HIP module compile uses.
+    (void)arch;
+    (void)arch_suffix;
+    (void)use_ptx;
+    ContextInfo* context_info = get_context_info(get_current_context());
+    if (!context_info || !context_info->device_info || !context_info->device_info->arch_str[0]) {
+        diagnostic = "could not determine the HIP device architecture";
+        return false;
+    }
+    std::vector<std::string> stored_options;
+    stored_options.push_back(std::string("--gpu-architecture=") + context_info->device_info->arch_str);
+    stored_options.push_back(std::string("-I") + include_dir);
+    append_hiprtc_system_include_options(stored_options);
+    append_hiprtc_compile_options(
+        stored_options, recipe.debug, recipe.optimization_level, recipe.verify_fp, recipe.fast_math, recipe.fuse_fp,
+        recipe.lineinfo
+    );
+    std::vector<const char*> options;
+    for (const std::string& option : stored_options)
+        options.push_back(option.c_str());
+#else
     std::string arch_option = std::string("--gpu-architecture=") + (use_ptx ? "compute_" : "sm_") + std::to_string(arch)
         + (arch_suffix ? arch_suffix : "");
     std::string include_option = std::string("--include-path=") + include_dir;
@@ -6449,6 +6514,7 @@ static bool apic_cuda_compile_program_to_memory(
         options, use_ptx, arch, recipe.debug, recipe.optimization_level, recipe.verify_fp, recipe.fast_math,
         recipe.fuse_fp, recipe.lineinfo
     );
+#endif  // defined(__HIP_PLATFORM_AMD__)
 
     nvrtcProgram program = nullptr;
     nvrtcResult result = nvrtcCreateProgram(
@@ -6474,12 +6540,21 @@ static bool apic_cuda_compile_program_to_memory(
     }
 
     size_t output_size = 0;
+#if defined(__HIP_PLATFORM_AMD__)
+    // the code object (nvrtcGetPTX maps to hiprtcGetCode)
+    result = nvrtcGetPTXSize(program, &output_size);
+    if (result == NVRTC_SUCCESS) {
+        output.resize(output_size);
+        result = nvrtcGetPTX(program, reinterpret_cast<char*>(output.data()));
+    }
+#else
     result = use_ptx ? nvrtcGetPTXSize(program, &output_size) : nvrtcGetCUBINSize(program, &output_size);
     if (result == NVRTC_SUCCESS) {
         output.resize(output_size);
         result = use_ptx ? nvrtcGetPTX(program, reinterpret_cast<char*>(output.data()))
                          : nvrtcGetCUBIN(program, reinterpret_cast<char*>(output.data()));
     }
+#endif  // defined(__HIP_PLATFORM_AMD__)
     nvrtcDestroyProgram(&program);
     if (result != NVRTC_SUCCESS) {
         output.clear();
