@@ -303,7 +303,7 @@ def atomic_add_contended_kernel(dst: wp.array(dtype=wp.float32)):
 
 
 def test_atomic_add_hip_fast_fp_atomics(test, device):
-    # The opt-in hardware float atomic must still sum exactly on the allocators
+    # The hardware float atomic must still sum exactly on the allocators
     # the default configuration uses. 2**20 is well inside float32's exact
     # integer range, so any shortfall is a dropped update rather than rounding.
     n = 1 << 20
@@ -314,6 +314,20 @@ def test_atomic_add_hip_fast_fp_atomics(test, device):
 
 
 devices = get_test_devices()
+
+
+def test_hip_fast_fp_atomics_env(test, device):
+    """The hardware float atomic is on by default; the documented spellings turn it off."""
+    cases = {None: True, "1": True, "0": False, "false": False, "No": False, " off ": False}
+    for value, expected in cases.items():
+        env = {"WARP_HIP_FAST_FP_ATOMICS": value} if value is not None else {}
+        source = "import os, sys\n"
+        if value is None:
+            source += "os.environ.pop('WARP_HIP_FAST_FP_ATOMICS', None)\n"
+        source += "import warp.config\nprint(warp.config.hip_fast_fp_atomics)\n"
+        result = run_python_subprocess(source, hide_gpu=True, env_updates=env)
+        test.assertEqual(result.returncode, 0, result.stderr)
+        test.assertEqual(result.stdout.strip().splitlines()[-1], str(expected), f"WARP_HIP_FAST_FP_ATOMICS={value!r}")
 
 
 class TestAtomic(unittest.TestCase):
@@ -425,6 +439,9 @@ for dtype in (
         devices=devices,
         dtype=dtype,
     )
+
+
+add_function_test(TestAtomic, "test_hip_fast_fp_atomics_env", test_hip_fast_fp_atomics_env, devices=["cpu"])
 
 
 if __name__ == "__main__":
