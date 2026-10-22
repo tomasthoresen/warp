@@ -548,17 +548,17 @@ a fresh ``WARP_CACHE_PATH``) to force a recompile.
 
 ## Optional settings
 
-All are off by default; the defaults are the validated configuration.
+The defaults are the validated configuration: the fast float atomics are on, the others off.
 
 | Setting | Effect |
 |---|---|
-| `WARP_HIP_FAST_FP_ATOMICS=1` | Lower float32 atomic accumulation to the hardware atomic instead of the compare-and-swap retry loop HIP emits. Also available as `warp.config.hip_fast_fp_atomics` or the `"hip_fast_fp_atomics"` module option. |
+| `WARP_HIP_FAST_FP_ATOMICS=0` | Restore the compare-and-swap retry loop HIP emits for float32 atomic accumulation; by default it is lowered to the hardware atomic. Also available as `warp.config.hip_fast_fp_atomics = False` or the `"hip_fast_fp_atomics"` module option set to `False`. |
 | `WARP_ENABLE_UMA_HYBRID=1` | Serve allocations of 64 KB or more from unified (managed) memory for zero-copy CPU access. |
 | `WARP_HIP_GRAPH_FREE_NODES=1` | Enable graph memory-free nodes. |
 | `WARP_HIP_USE_ASYNC_POOL=1` | Use the stream-ordered pool for all allocations rather than only during graph capture. |
 
-`WARP_HIP_FAST_FP_ATOMICS` is worth knowing about if a kernel funnels a reduction
-through one atomic address, where the default lowering is slow — see
+`WARP_HIP_FAST_FP_ATOMICS` matters if a kernel funnels a reduction through one
+atomic address, where HIP's own lowering is slow — see
 [Single-address atomic contention](KNOWN_ISSUES-AMD.md#single-address-atomic-contention).
 It is safe on Warp's own allocations, including the UMA hybrid allocator and
 `ReadbackBuffer`, which are marked coarse-grained so the hardware instruction
