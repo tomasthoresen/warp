@@ -17,6 +17,13 @@ from warp.tests.unittest_utils import add_function_test, get_cuda_test_devices, 
     while (clock64() - start < 100000000) {
     }
     __trap();
+#elif defined(__HIP_DEVICE_COMPILE__)
+    // clock64() wraps after 2^20 cycles on RDNA3; wall_clock64() is a 64-bit
+    // constant-rate counter (about 100 MHz), so this waits about 50 ms
+    const long long start = wall_clock64();
+    while (wall_clock64() - start < 5000000) {
+    }
+    __builtin_trap();
 #endif
     """
 )
