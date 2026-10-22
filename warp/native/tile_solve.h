@@ -166,6 +166,69 @@ inline CUDA_CALLABLE void scalar_cholesky_solve(TileA& A, TileX& X, TileY& Y)
     scalar_cholesky_back_substitution<Upper>(A, X);
 }
 
+#if defined(__HIP_DEVICE_COMPILE__)
+// Vector right-hand side on HIP when the factor fits in one wavefront (see
+// hip_wave_cholesky_impl): lane i keeps row i of L and of U = L^T in
+// registers, and each solved value is broadcast by a shuffle, instead of
+// thread 0 running both substitutions alone. The forward substitution keeps
+// scalar_cholesky_forward_substitution's subtraction order; the back
+// substitution accumulates in the opposite order.
+template <bool Upper, typename TileA, typename TileX, typename TileY>
+inline CUDA_CALLABLE void hip_wave_cholesky_solve(TileA& A, TileX& X, TileY& Y)
+{
+    using T = typename TileA::Type;
+    constexpr int n = TileA::Layout::Shape::dim(1);
+
+    auto l_idx = [](int row, int col) { return Upper ? tile_coord(col, row) : tile_coord(row, col); };
+    auto u_idx = [](int row, int col) { return Upper ? tile_coord(row, col) : tile_coord(col, row); };
+
+    const int lane = WP_TILE_THREAD_IDX;
+    if (lane < WP_TILE_WARP_SIZE) {
+        T lrow[n], urow[n];
+        T diag = T(1), acc = T(0);
+        WP_PRAGMA_UNROLL
+        for (int j = 0; j < n; ++j) {
+            lrow[j] = (lane < n && j < lane) ? A.data(l_idx(lane, j)) : T(0);
+            urow[j] = (lane < n && j > lane) ? A.data(u_idx(lane, j)) : T(0);
+        }
+        if (lane < n) {
+            diag = A.data(l_idx(lane, lane));
+            acc = Y.data(tile_coord(lane));
+        }
+
+        // forward: L z = y
+        WP_PRAGMA_UNROLL
+        for (int j = 0; j < n; ++j) {
+            const T zj = __shfl((diag != T(0.0f)) ? acc / diag : acc, j);
+            if (lane == j)
+                acc = zj;
+            else if (lane > j)
+                acc -= lrow[j] * zj;
+        }
+
+        // back: U x = z
+        WP_PRAGMA_UNROLL
+        for (int j = n - 1; j >= 0; --j) {
+            const T xj = __shfl((diag != T(0.0f)) ? acc / diag : acc, j);
+            if (lane == j)
+                acc = xj;
+            else if (lane < j)
+                acc -= urow[j] * xj;
+        }
+
+        if (lane < n)
+            X.data(tile_coord(lane)) = acc;
+    }
+    WP_TILE_SYNC();
+}
+
+template <typename TileA, typename TileY> constexpr bool hip_wave_cholesky_solve_fits()
+{
+    constexpr int n = TileA::Layout::Shape::dim(1);
+    return TileY::Layout::Shape::N == 1 && n <= 32 && n <= WP_TILE_WARP_SIZE && WP_TILE_BLOCK_DIM >= n;
+}
+#endif
+
 
 }  // namespace partitioned_gemm
 
@@ -419,7 +482,12 @@ inline CUDA_CALLABLE TileX& tile_cholesky_solve(Fwd fun_forward, TileA& A, TileY
 
     X = Y;
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if defined(__HIP_DEVICE_COMPILE__)
+    if constexpr (partitioned_gemm::hip_wave_cholesky_solve_fits<TileA, TileY>())
+        partitioned_gemm::hip_wave_cholesky_solve<Upper>(A, X, Y);
+    else
+        partitioned_gemm::scalar_cholesky_solve<Upper>(A, X, Y);
+#elif !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_cholesky_solve<Upper>(A, X, Y);
 #else
     if constexpr (wp_is_null_func<Fwd>::value) {
@@ -437,7 +505,12 @@ inline CUDA_CALLABLE TileX& tile_cholesky_solve(Fwd fun_forward, TileA& A, TileY
 template <bool Upper, typename Fwd, typename TileA, typename TileY>
 inline CUDA_CALLABLE void tile_cholesky_solve_inplace(Fwd fun_forward, TileA& A, TileY& Y)
 {
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if defined(__HIP_DEVICE_COMPILE__)
+    if constexpr (partitioned_gemm::hip_wave_cholesky_solve_fits<TileA, TileY>())
+        partitioned_gemm::hip_wave_cholesky_solve<Upper>(A, Y, Y);
+    else
+        partitioned_gemm::scalar_cholesky_solve<Upper>(A, Y, Y);
+#elif !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_cholesky_solve<Upper>(A, Y, Y);
 #else
     if constexpr (wp_is_null_func<Fwd>::value) {
