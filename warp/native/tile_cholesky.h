@@ -131,6 +131,63 @@ inline CUDA_CALLABLE void scalar_cholesky_impl(TileA& A, TileOut& Out)
     }
 }
 
+#if defined(__HIP_DEVICE_COMPILE__)
+// HIP has no device solver library for tiles. A matrix that fits in one
+// wavefront is factored by wavefront 0 with one row per lane in registers:
+// right-looking, the pivot column exchanged by shuffles, so no shared-memory
+// round trips or block barriers inside the factorization. The subtraction
+// order matches scalar_cholesky_impl.
+// Capped at 32 rows on every wavefront size: each lane holds a full row, and the
+// factorization is unrolled, so larger rows cost registers and code size.
+template <int n> constexpr bool hip_wave_cholesky_fits()
+{
+    return n <= 32 && n <= WP_TILE_WARP_SIZE && WP_TILE_BLOCK_DIM >= n;
+}
+
+template <bool Upper, typename TileA, typename TileOut>
+inline CUDA_CALLABLE void hip_wave_cholesky_impl(TileA& A, TileOut& Out)
+{
+    using T = typename TileA::Type;
+    constexpr int n = TileA::Layout::Shape::dim(1);
+
+    // Lower: (row, col), Upper: (col, row), as in scalar_cholesky_impl.
+    auto idx = [](int row, int col) { return Upper ? tile_coord(col, row) : tile_coord(row, col); };
+
+    const int lane = WP_TILE_THREAD_IDX;
+    if (lane < WP_TILE_WARP_SIZE) {
+        // row `lane` of the lower triangle; every load precedes every store, so
+        // in-place callers (A aliasing Out) are safe within the wavefront
+        T r[n];
+        WP_PRAGMA_UNROLL
+        for (int k = 0; k < n; ++k)
+            r[k] = (lane < n && k <= lane) ? A.data(idx(lane, k)) : T(0);
+
+        WP_PRAGMA_UNROLL
+        for (int j = 0; j < n; ++j) {
+            const T s = wp::sqrt(__shfl(r[j], j));
+            const T invS = T(1.0) / s;
+            const T l = (lane == j) ? s : r[j] * invS;
+            if (lane >= j)
+                r[j] = l;
+
+            // trailing update of row `lane`: a(lane, k) -= L(lane, j) * L(k, j)
+            WP_PRAGMA_UNROLL
+            for (int k = j + 1; k < n; ++k) {
+                const T lk = __shfl(l, k);
+                if (lane > j && k <= lane)
+                    r[k] -= l * lk;
+            }
+        }
+
+        if (lane < n) {
+            WP_PRAGMA_UNROLL
+            for (int k = 0; k < n; ++k)
+                Out.data(idx(lane, k)) = (k <= lane) ? r[k] : T(0);
+        }
+    }
+    WP_TILE_SYNC();
+}
+#endif
 
 // Cooperative scalar Cholesky adjoint, mirrors the libmathdx adjoint
 // structure but uses scalar inner kernels. Replaces the previous
@@ -295,7 +352,12 @@ CUDA_CALLABLE TileOut& tile_cholesky_impl(Fwd fun_forward, TileA& A, TileOut& Ou
 
     Out = A;
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if defined(__HIP_DEVICE_COMPILE__)
+    if constexpr (partitioned_gemm::hip_wave_cholesky_fits<TileA::Layout::Shape::dim(1)>())
+        partitioned_gemm::hip_wave_cholesky_impl<Upper>(A, Out);
+    else
+        partitioned_gemm::scalar_cholesky_impl<Upper>(A, Out);
+#elif !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_cholesky_impl<Upper>(A, Out);
 #else
     if constexpr (wp_is_null_func<Fwd>::value) {
@@ -432,7 +494,12 @@ CUDA_CALLABLE void tile_cholesky_inplace_impl(Fwd fun_forward, TileA& A)
     static_assert(TileA::Layout::Shape::N == 2, "Expected TileA::Layout::Shape::N == 2");
     static_assert(TileA::Layout::Shape::dim(0) == TileA::Layout::Shape::dim(1), "Expected TileA to be square");
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if defined(__HIP_DEVICE_COMPILE__)
+    if constexpr (partitioned_gemm::hip_wave_cholesky_fits<TileA::Layout::Shape::dim(1)>())
+        partitioned_gemm::hip_wave_cholesky_impl<Upper>(A, A);
+    else
+        partitioned_gemm::scalar_cholesky_impl<Upper>(A, A);
+#elif !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_cholesky_impl<Upper>(A, A);
 #else
     if constexpr (wp_is_null_func<Fwd>::value) {
