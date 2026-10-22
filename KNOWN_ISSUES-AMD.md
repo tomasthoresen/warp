@@ -1256,8 +1256,8 @@ defect is resolved. Neither is recommended without reference to the workload.
 
 ### Single-address atomic contention
 
-`atomic_add` to one destination from every thread is far slower on gfx1151 than
-on the RTX A4000. Measured with `asv/benchmarks/deterministic.py`
+With HIP's own lowering (`WARP_HIP_FAST_FP_ATOMICS=0`), `atomic_add` to one
+destination from every thread is far slower on gfx1151 than on the RTX A4000. Measured with `asv/benchmarks/deterministic.py`
 `AtomicAddDeterminismOverhead`, whose `num_outputs=1` case is defined as the
 worst-case contention arm — every thread targets the same output — against
 `num_outputs=65536` as the lower-contention control:
@@ -1275,7 +1275,7 @@ ratio is 2.6x, in line with the rest of the suite. Only the one-destination arm
 degrades by two to three orders of magnitude, and the absolute cost reaches 1.3
 seconds for a single benchmark iteration.
 
-**Cause established, and a remedy is available behind an opt-in.** HIP compiles
+**Cause established; the remedy is on by default.** HIP compiles
 `atomicAdd()` on a float to a `global_atomic_cmpswap_b32` retry loop rather than
 the hardware `global_atomic_add_f32`, because it cannot prove the target is
 coarse-grained memory. Confirmed by disassembly
@@ -1284,9 +1284,10 @@ coarse-grained memory. Confirmed by disassembly
 is what costs the two to three orders of magnitude; with the hardware
 instruction the same contended benchmark improves by over 100x.
 
-Set `warp.config.hip_fast_fp_atomics = True`, the `WARP_HIP_FAST_FP_ATOMICS=1`
-environment variable, or the `"hip_fast_fp_atomics"` module option to select the
-hardware instruction. It covers every float32 accumulation routed through
+The hardware instruction is the default. Set `warp.config.hip_fast_fp_atomics =
+False`, the `WARP_HIP_FAST_FP_ATOMICS=0` environment variable, or the
+`"hip_fast_fp_atomics"` module option to `False` to get the compare-and-swap loop
+back. It covers every float32 accumulation routed through
 `atomic_add`, including `atomic_sub` and the vector, matrix, quaternion and
 transform overloads. `atomic_max`, `atomic_min` and the float64 forms are
 unaffected — they are compare-and-swap loops on this architecture, as is float16.
@@ -1298,7 +1299,7 @@ measurable change on a cloth example without self-collision. Quote the frame
 count with any cloth figure — per-frame cost rises as self-contact builds, so the
 ratio grows with run length.
 
-**Off by default because of a correctness boundary, not a performance one.** The
+**On by default, with a correctness boundary.** The
 hardware instruction silently discards every update whose target is host-coherent
 memory: it executes in the GPU's L2 cache, and host-coherent pages are mapped so
 device accesses bypass L2, leaving the instruction with no ALU to run on. It
@@ -1310,7 +1311,8 @@ are marked coarse-grained when created, so they are cached in L2 and this settin
 is safe on them. It is **not** safe on managed memory Warp did not allocate that
 way, notably `CudaManagedAllocator` arrays, whose CUDA managed-memory coherence
 contract is left unchanged; a float32 atomic into such an array is discarded with
-no error.
+no error. Code that accumulates into such memory must turn the setting off
+(`WARP_HIP_FAST_FP_ATOMICS=0`, the config attribute or the module option).
 
 ### array_sum SIMT and tile paths invert
 

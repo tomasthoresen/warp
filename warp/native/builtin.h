@@ -2296,10 +2296,11 @@ template <typename T> inline CUDA_CALLABLE T atomic_add(T* buf, T value)
 // prove the target is coarse-grained memory. Under contention on a single
 // address that costs two orders of magnitude.
 //
-// The hardware form is opt-in, not the default: it silently drops every update
-// on fine-grained (managed) memory, which Warp hands out through
-// CudaManagedAllocator and the UMA hybrid allocator. Enabling it promises that
-// no float32 atomic target lives in managed memory.
+// The hardware form is the default (warp.config.hip_fast_fp_atomics). It
+// silently drops every update on fine-grained (host-coherent) memory. Warp's own
+// managed allocations, the UMA hybrid allocator and ReadbackBuffer, are marked
+// coarse-grained; CudaManagedAllocator arrays are not, and code that accumulates
+// into them must turn the setting off.
 //
 // This is the single lowering point for float32 accumulation, so atomic_sub
 // (an add of the negated value) and the vector and matrix overloads switch with
