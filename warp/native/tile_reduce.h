@@ -14,12 +14,14 @@
 namespace wp {
 
 
-template <typename T> int argmax_tracker(T champion_value, T current_value, int champion_index, int current_index)
+template <typename T>
+CUDA_CALLABLE int argmax_tracker(T champion_value, T current_value, int champion_index, int current_index)
 {
     return current_value > champion_value ? current_index : champion_index;
 }
 
-template <typename T> int argmin_tracker(T champion_value, T current_value, int champion_index, int current_index)
+template <typename T>
+CUDA_CALLABLE int argmin_tracker(T champion_value, T current_value, int champion_index, int current_index)
 {
     return current_value < champion_value ? current_index : champion_index;
 }
@@ -1038,7 +1040,7 @@ void adj_tile_reduce_axis(Op op, Tile& t, int axis, AdjOp& adj_op, AdjTile& adj_
 // convenience methods for specific reductions
 
 // whole-tile sum
-template <typename Tile> auto tile_sum(Tile& t) { return tile_reduce(add, t); }
+template <typename Tile> CUDA_CALLABLE auto tile_sum(Tile& t) { return tile_reduce(add, t); }
 
 // special case adjoint for summation
 template <typename Tile, typename AdjTile> CUDA_CALLABLE void adj_tile_sum(Tile& t, Tile& adj_t, AdjTile& adj_ret)
@@ -1320,7 +1322,7 @@ CUDA_CALLABLE void adj_tile_axpy(
 }
 
 // axis-specific sum
-template <int Axis, typename Tile> auto tile_sum_axis(Tile& t)
+template <int Axis, typename Tile> CUDA_CALLABLE auto tile_sum_axis(Tile& t)
 {
     return tile_reduce_axis_impl<Axis>([](auto x, auto y) { return add(x, y); }, t, typename Tile::Type(0), true);
 }
@@ -1361,14 +1363,14 @@ CUDA_CALLABLE void adj_tile_sum_axis(Tile& t, Tile& adj_t, AdjTile& adj_ret)
     WP_TILE_SYNC();
 }
 
-template <typename Tile> auto tile_max(Tile& t) { return tile_reduce(max, t); }
+template <typename Tile> CUDA_CALLABLE auto tile_max(Tile& t) { return tile_reduce(max, t); }
 
 template <typename Tile, typename AdjTile> void adj_tile_max(Tile& t, Tile& adj_t, AdjTile& adj_ret)
 {
     // MISSINGADJOINT: subgradient: route adj_ret to the index of the maximum element
 }
 
-template <typename Tile> auto tile_min(Tile& t) { return tile_reduce(min, t); }
+template <typename Tile> CUDA_CALLABLE auto tile_min(Tile& t) { return tile_reduce(min, t); }
 
 template <typename Tile, typename AdjTile> void adj_tile_min(Tile& t, Tile& adj_t, AdjTile& adj_ret)
 {
@@ -1376,9 +1378,9 @@ template <typename Tile, typename AdjTile> void adj_tile_min(Tile& t, Tile& adj_
 }
 
 
-template <typename Tile> auto tile_argmax(Tile& t) { return tile_arg_reduce(max, argmax_tracker, t); }
+template <typename Tile> CUDA_CALLABLE auto tile_argmax(Tile& t) { return tile_arg_reduce(max, argmax_tracker, t); }
 
-template <typename Tile> auto tile_argmin(Tile& t) { return tile_arg_reduce(min, argmin_tracker, t); }
+template <typename Tile> CUDA_CALLABLE auto tile_argmin(Tile& t) { return tile_arg_reduce(min, argmin_tracker, t); }
 
 
 }  // namespace wp

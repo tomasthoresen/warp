@@ -305,7 +305,7 @@ inline CUDA_CALLABLE void hip_wave_cholesky_solve2(TileA& A, TileX& X, TileY& Y)
 
 
 template <typename Fwd, typename Bkwd, typename TileL, typename TileY, typename TileZ>
-TileZ& tile_lower_solve(Fwd fun_forward, Bkwd fun_bkwd, TileL& L, TileY& y, TileZ& z)
+CUDA_CALLABLE TileZ& tile_lower_solve(Fwd fun_forward, Bkwd fun_bkwd, TileL& L, TileY& y, TileZ& z)
 {
     // Copy y to z
     z = y;
@@ -326,7 +326,7 @@ TileZ& tile_lower_solve(Fwd fun_forward, Bkwd fun_bkwd, TileL& L, TileY& y, Tile
 }
 
 template <typename Fwd, typename TileL, typename TileY>
-void tile_lower_solve_inplace(Fwd fun_forward, TileL& L, TileY& y)
+CUDA_CALLABLE void tile_lower_solve_inplace(Fwd fun_forward, TileL& L, TileY& y)
 {
 #if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_cholesky_forward_substitution<false>(L, y, y);
@@ -466,7 +466,7 @@ void adj_tile_lower_solve_inplace(
 
 
 template <typename Fwd, typename TileU, typename TileZ, typename TileX>
-TileX& tile_upper_solve(Fwd fun_forward, TileU& U, TileZ& z, TileX& x)
+CUDA_CALLABLE TileX& tile_upper_solve(Fwd fun_forward, TileU& U, TileZ& z, TileX& x)
 {
     // Copy z to x
     x = z;
@@ -491,7 +491,7 @@ TileX& tile_upper_solve(Fwd fun_forward, TileU& U, TileZ& z, TileX& x)
 }
 
 template <typename Fwd, typename TileU, typename TileZ>
-void tile_upper_solve_inplace(Fwd fun_forward, TileU& U, TileZ& z)
+CUDA_CALLABLE void tile_upper_solve_inplace(Fwd fun_forward, TileU& U, TileZ& z)
 {
 #if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
     {
@@ -547,7 +547,7 @@ void adj_tile_upper_solve_inplace(
 
 
 template <bool Upper, typename Fwd, typename TileA, typename TileY, typename TileX>
-TileX& tile_cholesky_solve(Fwd fun_forward, TileA& A, TileY& Y, TileX& X)
+CUDA_CALLABLE TileX& tile_cholesky_solve(Fwd fun_forward, TileA& A, TileY& Y, TileX& X)
 {
     // Copy y to x
 
@@ -576,7 +576,7 @@ TileX& tile_cholesky_solve(Fwd fun_forward, TileA& A, TileY& Y, TileX& X)
 }
 
 template <bool Upper, typename Fwd, typename TileA, typename TileY>
-void tile_cholesky_solve_inplace(Fwd fun_forward, TileA& A, TileY& Y)
+CUDA_CALLABLE void tile_cholesky_solve_inplace(Fwd fun_forward, TileA& A, TileY& Y)
 {
 #if defined(__HIP_DEVICE_COMPILE__)
     if constexpr (partitioned_gemm::hip_wave_cholesky_solve_fits<TileA, TileY>())
