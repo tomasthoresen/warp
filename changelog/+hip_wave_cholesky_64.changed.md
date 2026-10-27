@@ -1,0 +1,1 @@
+Extend the HIP wavefront path of `tile_cholesky()` and `tile_cholesky_solve()` with a vector right-hand side to `float32` matrices up to twice the wavefront size (64 on wave32): one wavefront holds two rows per lane.
