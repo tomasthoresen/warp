@@ -284,6 +284,53 @@ def test_cholesky_lower_block_dim_1(test, device):
 
 
 # -----------------------------------------------------------------------------
+# float32 tiles larger than one warp. On HIP, sizes up to twice the wavefront
+# take a separate factorization and solve path with two rows per lane.
+# -----------------------------------------------------------------------------
+
+
+def _make_f32_factor_and_solve_kernel(n):
+    @wp.kernel(enable_backward=False, module="unique", module_options={"enable_mathdx_solver": False})
+    def kernel(
+        gA: wp.array2d[wp.float32],
+        gY: wp.array1d[wp.float32],
+        gL: wp.array2d[wp.float32],
+        gU: wp.array2d[wp.float32],
+        gX: wp.array1d[wp.float32],
+    ):
+        A = wp.tile_load(gA, shape=(n, n), storage="shared")
+        wp.tile_store(gL, wp.tile_cholesky(A))
+        wp.tile_store(gU, wp.tile_cholesky(A, fill_mode="upper"))
+        y = wp.tile_load(gY, shape=n, storage="shared")
+        wp.tile_cholesky_inplace(A)
+        wp.tile_cholesky_solve_inplace(A, y)
+        wp.tile_store(gX, y)
+
+    return kernel
+
+
+def test_cholesky_f32_two_warps(test, device):
+    for n in (35, 48, 64):
+        A_np, L_ref = _spd(n, seed=50 + n)
+        y_np = np.random.default_rng(60 + n).standard_normal(n)
+        x_ref = np.linalg.solve(A_np, y_np)
+
+        A = wp.array(A_np, dtype=wp.float32, device=device)
+        Y = wp.array(y_np, dtype=wp.float32, device=device)
+        L = wp.zeros((n, n), dtype=wp.float32, device=device)
+        U = wp.zeros((n, n), dtype=wp.float32, device=device)
+        X = wp.zeros(n, dtype=wp.float32, device=device)
+        wp.launch_tiled(
+            _make_f32_factor_and_solve_kernel(n), dim=[1], inputs=[A, Y, L, U, X], block_dim=TILE_DIM, device=device
+        )
+
+        with test.subTest(n=n):
+            np.testing.assert_allclose(L.numpy(), L_ref, rtol=0, atol=1e-5 * np.abs(L_ref).max())
+            np.testing.assert_allclose(U.numpy(), L_ref.T, rtol=0, atol=1e-5 * np.abs(L_ref).max())
+            np.testing.assert_allclose(X.numpy(), x_ref, rtol=0, atol=1e-5 * np.abs(x_ref).max())
+
+
+# -----------------------------------------------------------------------------
 # Suite registration
 # -----------------------------------------------------------------------------
 
@@ -303,6 +350,7 @@ cholesky_tests = [
     ("test_cholesky_upper_backward", test_cholesky_upper_backward),
     ("test_cholesky_lower_backward_n32", test_cholesky_lower_backward_n32),
     ("test_cholesky_lower_block_dim_1", test_cholesky_lower_block_dim_1),
+    ("test_cholesky_f32_two_warps", test_cholesky_f32_two_warps),
 ]
 
 for name, func in cholesky_tests:
