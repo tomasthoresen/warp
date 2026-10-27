@@ -227,6 +227,77 @@ template <typename TileA, typename TileY> constexpr bool hip_wave_cholesky_solve
     constexpr int n = TileA::Layout::Shape::dim(1);
     return TileY::Layout::Shape::N == 1 && n <= 32 && n <= WP_TILE_WARP_SIZE && WP_TILE_BLOCK_DIM >= n;
 }
+
+// W < n <= 2W, vector right-hand side: lane i keeps the accumulators and the
+// diagonals of rows i and i + W in registers and reads the factor's entries
+// from the tile as each solved value is broadcast, so the register count
+// does not grow with n. Same orders as hip_wave_cholesky_solve. 4-byte types
+// only, like hip_wave_cholesky2_fits.
+template <typename TileA, typename TileY> constexpr bool hip_wave_cholesky_solve2_fits()
+{
+    constexpr int n = TileA::Layout::Shape::dim(1);
+    return sizeof(typename TileA::Type) == 4 && TileY::Layout::Shape::N == 1 && n > WP_TILE_WARP_SIZE
+        && n <= 2 * WP_TILE_WARP_SIZE && n <= 64 && WP_TILE_BLOCK_DIM >= WP_TILE_WARP_SIZE;
+}
+
+template <bool Upper, typename TileA, typename TileX, typename TileY>
+inline CUDA_CALLABLE void hip_wave_cholesky_solve2(TileA& A, TileX& X, TileY& Y)
+{
+    using T = typename TileA::Type;
+    constexpr int n = TileA::Layout::Shape::dim(1);
+    constexpr int W = WP_TILE_WARP_SIZE;
+
+    auto l_idx = [](int row, int col) { return Upper ? tile_coord(col, row) : tile_coord(row, col); };
+    auto u_idx = [](int row, int col) { return Upper ? tile_coord(row, col) : tile_coord(col, row); };
+
+    const int lane = WP_TILE_THREAD_IDX;
+    if (lane < W) {
+        const int r0 = lane;
+        const int r1 = lane + W;
+        const bool has1 = r1 < n;
+        const T diag0 = A.data(l_idx(r0, r0));
+        const T diag1 = has1 ? A.data(l_idx(r1, r1)) : T(1);
+        T acc0 = Y.data(tile_coord(r0));
+        T acc1 = has1 ? Y.data(tile_coord(r1)) : T(0);
+
+        // forward: L z = y; row j's value is broadcast from its owner lane
+        WP_PRAGMA_UNROLL
+        for (int j = 0; j < n; ++j) {
+            const T own
+                = (j < W) ? ((diag0 != T(0.0f)) ? acc0 / diag0 : acc0) : ((diag1 != T(0.0f)) ? acc1 / diag1 : acc1);
+            const T zj = __shfl(own, j % W);
+            if (r0 == j)
+                acc0 = zj;
+            else if (r0 > j)
+                acc0 -= A.data(l_idx(r0, j)) * zj;
+            if (r1 == j)
+                acc1 = zj;
+            else if (has1 && r1 > j)
+                acc1 -= A.data(l_idx(r1, j)) * zj;
+        }
+
+        // back: U x = z
+        WP_PRAGMA_UNROLL
+        for (int j = n - 1; j >= 0; --j) {
+            const T own
+                = (j < W) ? ((diag0 != T(0.0f)) ? acc0 / diag0 : acc0) : ((diag1 != T(0.0f)) ? acc1 / diag1 : acc1);
+            const T xj = __shfl(own, j % W);
+            if (r0 == j)
+                acc0 = xj;
+            else if (r0 < j)
+                acc0 -= A.data(u_idx(r0, j)) * xj;
+            if (r1 == j)
+                acc1 = xj;
+            else if (has1 && r1 < j)
+                acc1 -= A.data(u_idx(r1, j)) * xj;
+        }
+
+        X.data(tile_coord(r0)) = acc0;
+        if (has1)
+            X.data(tile_coord(r1)) = acc1;
+    }
+    WP_TILE_SYNC();
+}
 #endif
 
 
@@ -485,6 +556,8 @@ inline CUDA_CALLABLE TileX& tile_cholesky_solve(Fwd fun_forward, TileA& A, TileY
 #if defined(__HIP_DEVICE_COMPILE__)
     if constexpr (partitioned_gemm::hip_wave_cholesky_solve_fits<TileA, TileY>())
         partitioned_gemm::hip_wave_cholesky_solve<Upper>(A, X, Y);
+    else if constexpr (partitioned_gemm::hip_wave_cholesky_solve2_fits<TileA, TileY>())
+        partitioned_gemm::hip_wave_cholesky_solve2<Upper>(A, X, Y);
     else
         partitioned_gemm::scalar_cholesky_solve<Upper>(A, X, Y);
 #elif !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
@@ -508,6 +581,8 @@ inline CUDA_CALLABLE void tile_cholesky_solve_inplace(Fwd fun_forward, TileA& A,
 #if defined(__HIP_DEVICE_COMPILE__)
     if constexpr (partitioned_gemm::hip_wave_cholesky_solve_fits<TileA, TileY>())
         partitioned_gemm::hip_wave_cholesky_solve<Upper>(A, Y, Y);
+    else if constexpr (partitioned_gemm::hip_wave_cholesky_solve2_fits<TileA, TileY>())
+        partitioned_gemm::hip_wave_cholesky_solve2<Upper>(A, Y, Y);
     else
         partitioned_gemm::scalar_cholesky_solve<Upper>(A, Y, Y);
 #elif !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0

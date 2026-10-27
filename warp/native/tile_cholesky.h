@@ -189,6 +189,76 @@ inline CUDA_CALLABLE void hip_wave_cholesky_impl(TileA& A, TileOut& Out)
     }
     WP_TILE_SYNC();
 }
+
+// W < n <= 2W: each lane holds two rows, lane and lane + W, so one wavefront
+// still factors the tile in registers. Row j's pivot sits in lane j % W, in
+// the first or the second array by j / W; j is a constant once the loops
+// unroll, so the choice costs nothing. 4-byte types only: two rows of
+// doubles spill most of the registers, gain little over the scalar path, and
+// the ROCm 7.2 compiler miscompiles the n = 64 factor-and-solve kernel.
+template <typename T, int n> constexpr bool hip_wave_cholesky2_fits()
+{
+    return sizeof(T) == 4 && n > WP_TILE_WARP_SIZE && n <= 2 * WP_TILE_WARP_SIZE && n <= 64
+        && WP_TILE_BLOCK_DIM >= WP_TILE_WARP_SIZE;
+}
+
+template <bool Upper, typename TileA, typename TileOut>
+inline CUDA_CALLABLE void hip_wave_cholesky2_impl(TileA& A, TileOut& Out)
+{
+    using T = typename TileA::Type;
+    constexpr int n = TileA::Layout::Shape::dim(1);
+    constexpr int W = WP_TILE_WARP_SIZE;
+
+    auto idx = [](int row, int col) { return Upper ? tile_coord(col, row) : tile_coord(row, col); };
+
+    const int lane = WP_TILE_THREAD_IDX;
+    if (lane < W) {
+        // rows r0 and r1 of the lower triangle; r1 beyond the tile holds zeros
+        // and never stores. Every load precedes every store, so in-place
+        // callers (A aliasing Out) are safe within the wavefront.
+        const int r0 = lane;
+        const int r1 = lane + W;
+        T a[n];
+        T b[n];
+        WP_PRAGMA_UNROLL
+        for (int k = 0; k < n; ++k) {
+            a[k] = (k <= r0) ? A.data(idx(r0, k)) : T(0);
+            b[k] = (r1 < n && k <= r1) ? A.data(idx(r1, k)) : T(0);
+        }
+
+        WP_PRAGMA_UNROLL
+        for (int j = 0; j < n; ++j) {
+            const T pivot = (j < W) ? a[j] : b[j];
+            const T s = wp::sqrt(__shfl(pivot, j % W));
+            // divide, as in hip_wave_cholesky_impl
+            const T la = (r0 == j) ? s : a[j] / s;
+            const T lb = (r1 == j) ? s : b[j] / s;
+            if (r0 >= j)
+                a[j] = la;
+            if (r1 >= j)
+                b[j] = lb;
+
+            // trailing update: a(r, k) -= L(r, j) * L(k, j); L(k, j) lives in
+            // lane k % W, in la for k < W and in lb above
+            WP_PRAGMA_UNROLL
+            for (int k = j + 1; k < n; ++k) {
+                const T lk = (k < W) ? __shfl(la, k) : __shfl(lb, k - W);
+                if (r0 > j && k <= r0)
+                    a[k] -= la * lk;
+                if (r1 > j && k <= r1)
+                    b[k] -= lb * lk;
+            }
+        }
+
+        WP_PRAGMA_UNROLL
+        for (int k = 0; k < n; ++k) {
+            Out.data(idx(r0, k)) = (k <= r0) ? a[k] : T(0);
+            if (r1 < n)
+                Out.data(idx(r1, k)) = (k <= r1) ? b[k] : T(0);
+        }
+    }
+    WP_TILE_SYNC();
+}
 #endif
 
 // Cooperative scalar Cholesky adjoint, mirrors the libmathdx adjoint
@@ -357,6 +427,8 @@ CUDA_CALLABLE TileOut& tile_cholesky_impl(Fwd fun_forward, TileA& A, TileOut& Ou
 #if defined(__HIP_DEVICE_COMPILE__)
     if constexpr (partitioned_gemm::hip_wave_cholesky_fits<TileA::Layout::Shape::dim(1)>())
         partitioned_gemm::hip_wave_cholesky_impl<Upper>(A, Out);
+    else if constexpr (partitioned_gemm::hip_wave_cholesky2_fits<typename TileA::Type, TileA::Layout::Shape::dim(1)>())
+        partitioned_gemm::hip_wave_cholesky2_impl<Upper>(A, Out);
     else
         partitioned_gemm::scalar_cholesky_impl<Upper>(A, Out);
 #elif !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
@@ -499,6 +571,8 @@ CUDA_CALLABLE void tile_cholesky_inplace_impl(Fwd fun_forward, TileA& A)
 #if defined(__HIP_DEVICE_COMPILE__)
     if constexpr (partitioned_gemm::hip_wave_cholesky_fits<TileA::Layout::Shape::dim(1)>())
         partitioned_gemm::hip_wave_cholesky_impl<Upper>(A, A);
+    else if constexpr (partitioned_gemm::hip_wave_cholesky2_fits<typename TileA::Type, TileA::Layout::Shape::dim(1)>())
+        partitioned_gemm::hip_wave_cholesky2_impl<Upper>(A, A);
     else
         partitioned_gemm::scalar_cholesky_impl<Upper>(A, A);
 #elif !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
