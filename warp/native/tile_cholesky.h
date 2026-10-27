@@ -165,8 +165,10 @@ inline CUDA_CALLABLE void hip_wave_cholesky_impl(TileA& A, TileOut& Out)
         WP_PRAGMA_UNROLL
         for (int j = 0; j < n; ++j) {
             const T s = wp::sqrt(__shfl(r[j], j));
-            const T invS = T(1.0) / s;
-            const T l = (lane == j) ? s : r[j] * invS;
+            // Divide; r[j] * (1 / s) spills registers at n >= 28 on gfx1151 and
+            // sends the ROCm 7.2 compiler's instruction combiner into a loop
+            // that never finishes.
+            const T l = (lane == j) ? s : r[j] / s;
             if (lane >= j)
                 r[j] = l;
 
