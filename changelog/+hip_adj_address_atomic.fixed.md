@@ -1,0 +1,1 @@
+Keep the hardware float atomic for gradient accumulation on HIP: the array read adjoint now makes one atomic call instead of one per gradient target, which the compiler merged into a compare-and-swap loop.

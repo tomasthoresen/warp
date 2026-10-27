@@ -1276,23 +1276,27 @@ CUDA_CALLABLE inline void adj_atomic_add(uint64* buf, uint64 value) { }
 CUDA_CALLABLE inline void adj_atomic_add(bool* buf, bool value) { }
 
 // only generate gradients for T types
+//
+// The gradient goes to the explicit adjoint array when one is given, else to
+// the array's own gradient buffer: one accumulate call with the target selected
+// first. A call in each branch lets the compiler merge the two atomics, and the
+// merged atomic loses the memory-scope hint HIP's hardware float add needs, so
+// float32 gradients would fall back to the compare-and-swap loop.
 template <typename T>
 inline CUDA_CALLABLE void
 adj_address(const array_t<T>& buf, int i, const array_t<T>& adj_buf, int adj_i, const T& adj_output)
 {
-    if (adj_buf.data)
-        adj_atomic_add(&index(adj_buf, i), adj_output);
-    else if (buf.grad)
-        adj_atomic_add(&index_grad(buf, i), adj_output);
+    T* grad = adj_buf.data ? &index(adj_buf, i) : (buf.grad ? &index_grad(buf, i) : nullptr);
+    if (grad)
+        adj_atomic_add(grad, adj_output);
 }
 template <typename T>
 inline CUDA_CALLABLE void
 adj_address(const array_t<T>& buf, int i, int j, const array_t<T>& adj_buf, int adj_i, int adj_j, const T& adj_output)
 {
-    if (adj_buf.data)
-        adj_atomic_add(&index(adj_buf, i, j), adj_output);
-    else if (buf.grad)
-        adj_atomic_add(&index_grad(buf, i, j), adj_output);
+    T* grad = adj_buf.data ? &index(adj_buf, i, j) : (buf.grad ? &index_grad(buf, i, j) : nullptr);
+    if (grad)
+        adj_atomic_add(grad, adj_output);
 }
 template <typename T>
 inline CUDA_CALLABLE void adj_address(
@@ -1307,10 +1311,9 @@ inline CUDA_CALLABLE void adj_address(
     const T& adj_output
 )
 {
-    if (adj_buf.data)
-        adj_atomic_add(&index(adj_buf, i, j, k), adj_output);
-    else if (buf.grad)
-        adj_atomic_add(&index_grad(buf, i, j, k), adj_output);
+    T* grad = adj_buf.data ? &index(adj_buf, i, j, k) : (buf.grad ? &index_grad(buf, i, j, k) : nullptr);
+    if (grad)
+        adj_atomic_add(grad, adj_output);
 }
 template <typename T>
 inline CUDA_CALLABLE void adj_address(
@@ -1327,10 +1330,9 @@ inline CUDA_CALLABLE void adj_address(
     const T& adj_output
 )
 {
-    if (adj_buf.data)
-        adj_atomic_add(&index(adj_buf, i, j, k, l), adj_output);
-    else if (buf.grad)
-        adj_atomic_add(&index_grad(buf, i, j, k, l), adj_output);
+    T* grad = adj_buf.data ? &index(adj_buf, i, j, k, l) : (buf.grad ? &index_grad(buf, i, j, k, l) : nullptr);
+    if (grad)
+        adj_atomic_add(grad, adj_output);
 }
 
 template <typename T>
