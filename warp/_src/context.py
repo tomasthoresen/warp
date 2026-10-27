@@ -5604,8 +5604,6 @@ class CudaUmaHybridAllocator:
         self._managed_ptrs = set()
         self._pool_alloc = CudaMempoolAllocator(device)
         # Load HIP for managed allocation
-        import ctypes
-
         try:
             self._hip = ctypes.CDLL("/opt/rocm/lib/libamdhip64.so")
         except OSError:
@@ -5755,7 +5753,8 @@ class CudaHipCaptureAwareAllocator:
     memory_kind = MemoryKind.CUDA_DEVICE
 
     def __init__(self, device):
-        assert device.is_cuda
+        if not device.is_cuda:
+            raise ValueError(f"Device {device} is not a CUDA device")
         self.device = device
         self._default = CudaDefaultAllocator(device)
         self._pool = CudaMempoolAllocator(device)
@@ -14248,7 +14247,9 @@ def _hip_take_segment(graph: Graph):
 def _hip_native_capture_begin(device: Device, stream: Stream, capture_mode, graph: Graph | None = None) -> Graph:
     """Begin a native capture on ``stream`` recording into ``graph`` (or a new Graph). APIC recording, if any,
     is left running: it is one op stream across the whole split capture."""
-    if not runtime.core.wp_cuda_graph_begin_capture(device.context, stream.cuda_stream, 0, int(CaptureMode(capture_mode))):
+    if not runtime.core.wp_cuda_graph_begin_capture(
+        device.context, stream.cuda_stream, 0, int(CaptureMode(capture_mode))
+    ):
         raise RuntimeError(runtime.get_error_string())
     capture_id = runtime.core.wp_cuda_stream_get_capture_id(stream.cuda_stream)
     if graph is None:
@@ -14325,10 +14326,14 @@ def _hip_capture_conditional(device: Device, stream: Stream, kind: str, conditio
     cond_region_id, cond_offset = -1, 0
     if apic_capture is not None:
         if any(b is not None and not callable(b) for b in bodies) or any(isinstance(b, Graph) for b in bodies):
-            raise NotImplementedError(f"APIC capture_{kind} with Graph bodies is not yet implemented; pass a Callable instead")
+            raise NotImplementedError(
+                f"APIC capture_{kind} with Graph bodies is not yet implemented; pass a Callable instead"
+            )
         cond_region_id, cond_offset = apic_capture.track_array(condition)
         if cond_region_id < 0:
-            raise RuntimeError(f"capture_{kind}(): condition array could not be tracked for APIC capture (null pointer?)")
+            raise RuntimeError(
+                f"capture_{kind}(): condition array could not be tracked for APIC capture (null pointer?)"
+            )
 
     try:
         outer = _hip_native_capture_end(device, stream)
@@ -14359,7 +14364,9 @@ def _hip_capture_conditional(device: Device, stream: Stream, kind: str, conditio
 
         op = APIC_OP_WHILE if kind == "while" else APIC_OP_IF
         second = branches[1] if len(branches) > 1 else None
-        runtime.core.wp_apic_record_conditional(apic_capture.apic_state, op, cond_region_id, cond_offset, branches[0], second)
+        runtime.core.wp_apic_record_conditional(
+            apic_capture.apic_state, op, cond_region_id, cond_offset, branches[0], second
+        )
 
 
 _hip_condition_lock = threading.Lock()
