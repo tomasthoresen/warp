@@ -268,8 +268,8 @@ from . import utils as utils
 from warp.config import DeterministicMode as DeterministicMode
 from warp._src.math import *
 from warp._src.context import RegisteredGLBuffer as RegisteredGLBuffer
-from warp._src.uma import ReadbackBuffer as ReadbackBuffer
 from typing import TYPE_CHECKING as _TYPE_CHECKING
+from warp._src.uma import ReadbackBuffer as ReadbackBuffer
 Length = TypeVar("Length", bound=int)
 Rows = TypeVar("Rows", bound=int)
 Cols = TypeVar("Cols", bound=int)
