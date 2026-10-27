@@ -556,6 +556,7 @@ The defaults are the validated configuration: the fast float atomics are on, the
 | `WARP_ENABLE_UMA_HYBRID=1` | Serve allocations of 64 KB or more from unified (managed) memory for zero-copy CPU access. |
 | `WARP_HIP_GRAPH_FREE_NODES=1` | Enable graph memory-free nodes. |
 | `WARP_HIP_USE_ASYNC_POOL=1` | Use the stream-ordered pool for all allocations rather than only during graph capture. |
+| `WARP_MEMPOOL_RELEASE_THRESHOLD=0.5` | Let each device's memory pool keep freed memory, here up to half of the device's memory, instead of returning it to the driver at every synchronization. A workload that frees temporaries on every step and synchronizes in between, such as MuJoCo-Warp through Newton, otherwise pays that release at each synchronization. Also available as `warp.config.mempool_release_threshold`; not specific to HIP. |
 
 `WARP_HIP_FAST_FP_ATOMICS` matters if a kernel funnels a reduction through one
 atomic address, where HIP's own lowering is slow — see
