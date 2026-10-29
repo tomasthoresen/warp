@@ -899,9 +899,12 @@ void wp_free_pinned(void* ptr)
 }
 
 #if defined(__HIP_PLATFORM_AMD__)
-// Pointers that wp_alloc_device served from the stream-ordered pool, which on
-// HIP happens only during graph capture. wp_free_device consults this so each
-// pointer goes back to the allocator it came from.
+// Pointers served from the stream-ordered pool: everything wp_alloc_device_async
+// returns except the plain stable-capture allocations, which g_graph_allocs
+// tracks instead. wp_alloc_device reaches the pool only during graph capture,
+// while some native scratch (scan, run-length encode, sort) calls
+// wp_alloc_device_async directly. wp_free_device and free_device_on_stream
+// consult this so each pointer goes back to the allocator it came from.
 //
 // Both low-level deallocators drop the pointer as well, because several call
 // sites free memory through them directly rather than through wp_free_device.
@@ -939,12 +942,7 @@ void* wp_alloc_device(void* context, size_t s, const char* tag)
         if (!wp_cuda_stream_is_capturing(get_current_stream(context)))
             return wp_alloc_device_default(context, s, tag);
 
-        void* ptr = wp_alloc_device_async(context, s, WP_CURRENT_STREAM, tag);
-        if (ptr) {
-            std::lock_guard<std::mutex> guard(g_hip_pool_allocs_mutex);
-            g_hip_pool_allocs.insert(ptr);
-        }
-        return ptr;
+        return wp_alloc_device_async(context, s, WP_CURRENT_STREAM, tag);
     }
     return wp_alloc_device_default(context, s, tag);
 #else
@@ -1044,7 +1042,8 @@ void wp_free_device(void* context, void* ptr)
         if (from_pool)
             g_hip_pool_allocs.erase(it);
     }
-    if (from_pool)
+    // graph allocations, including plain stable ones, need the graph-aware path
+    if (from_pool || g_graph_allocs.find(ptr) != g_graph_allocs.end())
         wp_free_device_async(context, ptr);
     else
         wp_free_device_default(context, ptr);
@@ -1064,21 +1063,7 @@ void free_device_on_stream(void* context, void* ptr, void* stream)
     if (!ptr)
         return;
 
-#if defined(__HIP_PLATFORM_AMD__)
-    // return the pointer to whichever allocator produced it; see wp_alloc_device
-    bool from_pool = false;
-    {
-        std::lock_guard<std::mutex> guard(g_hip_pool_allocs_mutex);
-        auto it = g_hip_pool_allocs.find(ptr);
-        from_pool = (it != g_hip_pool_allocs.end());
-        if (from_pool)
-            g_hip_pool_allocs.erase(it);
-    }
-    if (!from_pool) {
-        wp_free_device_default(context, ptr);
-        return;
-    }
-#else
+#if !defined(__HIP_PLATFORM_AMD__)
     int ordinal = wp_cuda_context_get_device_ordinal(context);
     if (!wp_cuda_device_is_mempool_supported(ordinal)) {
         wp_free_device_default(context, ptr);
@@ -1091,6 +1076,23 @@ void free_device_on_stream(void* context, void* ptr, void* stream)
     CUstream cuda_stream = static_cast<CUstream>(stream);
     bool is_legacy_stream = cuda_stream == NULL || cuda_stream == CU_STREAM_LEGACY;
 
+#if defined(__HIP_PLATFORM_AMD__)
+    // Return a plain pointer to the plain allocator, even during an unrelated
+    // capture (the release is deferred there); see g_hip_pool_allocs. Graph
+    // allocations, including plain stable ones, take the graph-aware path below.
+    if (g_graph_allocs.find(ptr) == g_graph_allocs.end()) {
+        bool from_pool = false;
+        {
+            std::lock_guard<std::mutex> lock(g_hip_pool_allocs_mutex);
+            from_pool = g_hip_pool_allocs.count(ptr) > 0;
+        }
+        if (!from_pool) {
+            wp_free_device_default(context, ptr);
+            return;
+        }
+    }
+#endif
+
     // Preserve graph-aware cleanup. Check the legacy stream first: querying its capture
     // status during a blocking-stream capture is invalid.
     if ((is_legacy_stream && !g_captures.empty()) || g_graph_allocs.find(ptr) != g_graph_allocs.end()
@@ -1098,6 +1100,10 @@ void free_device_on_stream(void* context, void* ptr, void* stream)
         wp_free_device_async(context, ptr);
         return;
     }
+
+#if defined(__HIP_PLATFORM_AMD__)
+    hip_pool_allocs_forget(ptr);
+#endif
 
     if (g_alloc_tracker.enabled)
         g_alloc_tracker.record_free(ptr);
@@ -1249,6 +1255,13 @@ void* wp_alloc_device_async(void* context, size_t s, void* stream_, const char* 
 
     void* ptr = NULL;
     check_cuda(cudaMallocAsync(&ptr, s, stream));
+
+#if defined(__HIP_PLATFORM_AMD__)
+    if (ptr) {
+        std::lock_guard<std::mutex> guard(g_hip_pool_allocs_mutex);
+        g_hip_pool_allocs.insert(ptr);
+    }
+#endif
 
     if (ptr) {
         // if the stream is capturing, the allocation requires special handling
