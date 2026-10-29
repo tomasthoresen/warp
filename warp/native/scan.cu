@@ -103,9 +103,10 @@ void scan_device(
         check_cuda(cub::DeviceScan::ExclusiveSum(NULL, scan_temp_size, values_in_iter, values_out_iter, n, stream));
     }
 
-    // hipCUB rejects managed memory for temp buffers.
-    // Force mempool path even on UMA devices.
-    void* temp_buffer = wp_alloc_device_async(WP_CURRENT_CONTEXT, scan_temp_size, WP_CURRENT_STREAM, "(native:scan)");
+    void* temp_buffer = wp_alloc_device(WP_CURRENT_CONTEXT, scan_temp_size, "(native:scan)");
+    // wp_alloc_device() already records the CUDA error.
+    if (scan_temp_size > 0 && !temp_buffer)
+        return;
 
     // scan each scalar component independently
     for (int k = 0; k < type_length; ++k) {
@@ -128,7 +129,7 @@ void scan_device(
         }
     }
 
-    wp_free_device_async(WP_CURRENT_CONTEXT, temp_buffer);
+    wp_free_device(WP_CURRENT_CONTEXT, temp_buffer);
 }
 
 template <typename T> void scan_device(const T* values_in, T* values_out, int n, bool inclusive)
