@@ -308,6 +308,9 @@ using CUmemoryPool = hipMemPool_t;
 #ifndef CU_STREAM_CAPTURE_STATUS_ACTIVE
 #define CU_STREAM_CAPTURE_STATUS_ACTIVE hipStreamCaptureStatusActive
 #endif  // CU_STREAM_CAPTURE_STATUS_ACTIVE
+#ifndef CU_STREAM_LEGACY
+#define CU_STREAM_LEGACY ((CUstream)hipStreamLegacy)
+#endif  // CU_STREAM_LEGACY
 #ifndef cudaGraphExecMemcpyNodeSetParams1D
 #define cudaGraphExecMemcpyNodeSetParams1D hipGraphExecMemcpyNodeSetParams1D
 #endif  // cudaGraphExecMemcpyNodeSetParams1D
