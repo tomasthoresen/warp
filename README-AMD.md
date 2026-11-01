@@ -456,6 +456,7 @@ The defaults are the validated configuration: the fast float atomics are on, the
 | `WARP_ENABLE_UMA_HYBRID=1` | Serve allocations of 64 KB or more from unified (managed) memory for zero-copy CPU access. |
 | `WARP_HIP_GRAPH_FREE_NODES=1` | Enable graph memory-free nodes. |
 | `WARP_HIP_USE_ASYNC_POOL=1` | Use the stream-ordered pool for all allocations rather than only during graph capture. |
+| `WARP_HIP_ALLOC_CACHE=1` | Reuse freed device memory instead of returning each block with a plain free, which costs the device. Freed blocks wait until one device synchronize shows that no queued work uses them, then serve new allocations of the same size; up to 2 GiB is kept. Helps workloads that free many temporaries per step, such as MuJoCo-Warp through Newton. The synchronize invalidates a graph capture that another library runs at the same time in relaxed mode on another stream or in thread-local mode on another thread (for example `torch.cuda.graph` with `capture_error_mode="relaxed"` or `"thread_local"`); a plain free would leave it intact. |
 | `WARP_MEMPOOL_RELEASE_THRESHOLD=0.5` | Let each device's memory pool keep freed memory, here up to half of the device's memory, instead of returning it to the driver at every synchronization. A workload that frees temporaries on every step and synchronizes in between, such as MuJoCo-Warp through Newton, otherwise pays that release at each synchronization. Also available as `warp.config.mempool_release_threshold`; not specific to HIP. |
 
 `WARP_HIP_FAST_FP_ATOMICS` matters if a kernel funnels a reduction through one
@@ -467,7 +468,7 @@ works on them. It is **not** safe on managed memory Warp did not allocate that
 way, such as `CudaManagedAllocator` arrays: the hardware atomic silently discards
 updates to host-coherent memory.
 
-The other three change allocation or graph behaviour that the validated baseline
+The others change allocation or graph behaviour that the validated baseline
 does not use. `WARP_HIP_GRAPH_FREE_NODES=1` in particular fixes a small number of
 examples and breaks a larger number — see
 [KNOWN_ISSUES-AMD.md](KNOWN_ISSUES-AMD.md).
