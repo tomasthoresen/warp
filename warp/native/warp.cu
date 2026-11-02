@@ -5639,8 +5639,11 @@ static void append_hiprtc_compile_options(
 
     // -ffast-math leaves fp32 denormals on, unlike --use_fast_math on CUDA, so a guard such as
     // `if (l > 0)` passes for a denormal `l` that the approximate rcp/rsq then treat as zero.
+    // It also lets the compiler reassociate, which --use_fast_math does not, so sums that must
+    // cancel, such as equal and opposite forces, no longer do.
     if (fast_math) {
         stored_options.push_back("-ffast-math");
+        stored_options.push_back("-fno-associative-math");
         stored_options.push_back("-fgpu-flush-denormals-to-zero");
     }
 
