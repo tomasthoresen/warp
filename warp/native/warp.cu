@@ -902,8 +902,8 @@ void wp_free_pinned(void* ptr)
 // returns except the plain stable-capture allocations, which g_graph_allocs
 // tracks instead. wp_alloc_device reaches the pool only during graph capture,
 // while some native scratch (scan, run-length encode, sort) calls
-// wp_alloc_device_async directly. wp_free_device and free_device_on_stream
-// consult this so each pointer goes back to the allocator it came from.
+// wp_alloc_device_async directly. wp_free_device consults this so each pointer
+// goes back to the allocator it came from.
 //
 // Both low-level deallocators drop the pointer as well, because several call
 // sites free memory through them directly rather than through wp_free_device.
