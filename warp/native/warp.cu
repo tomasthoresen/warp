@@ -5637,8 +5637,12 @@ static void append_hiprtc_compile_options(
     if (verify_fp)
         stored_options.push_back("-DWP_VERIFY_FP");
 
-    if (fast_math)
+    // -ffast-math leaves fp32 denormals on, unlike --use_fast_math on CUDA, so a guard such as
+    // `if (l > 0)` passes for a denormal `l` that the approximate rcp/rsq then treat as zero.
+    if (fast_math) {
         stored_options.push_back("-ffast-math");
+        stored_options.push_back("-fgpu-flush-denormals-to-zero");
+    }
 
     // clang's HIP default already contracts (fast-honor-pragmas), so fuse_fp=false has to say so
     // explicitly to match --fmad=false on CUDA.
