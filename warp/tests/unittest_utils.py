@@ -9,11 +9,13 @@ import importlib.util
 import io
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 
 
 def _normalize_direct_test_sys_path():
@@ -597,3 +599,78 @@ class ParallelJunitTestResult(unittest.TextTestResult):
 
     def printErrors(self):
         pass
+
+
+def run_python_subprocess(
+    source: str,
+    *args: str,
+    timeout: float = 60,
+    hide_gpu: bool = False,
+    env_updates: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run Python source in a child interpreter with test-safe process settings.
+
+    Use this helper when the child process's exit status or output is part of
+    the test assertion.
+
+    Crash dump collection is suppressed before ``source`` imports Warp: POSIX
+    core dumps are disabled, while Windows Error Reporting is configured not to
+    collect expected child-process failures. Set ``hide_gpu`` for CPU-only
+    children so they do not enumerate CUDA devices or create CUDA contexts.
+
+    Args:
+        source: Python source passed to the child interpreter with ``-c``.
+        *args: Arguments exposed to ``source`` through ``sys.argv[1:]``.
+        timeout: Maximum number of seconds to wait for the child.
+        hide_gpu: Whether to hide GPUs from the child by setting
+            ``CUDA_VISIBLE_DEVICES`` to an empty string.
+        env_updates: Environment variables to add or replace in the inherited
+            child environment.
+
+    Returns:
+        The completed child process with captured text output.
+
+    Raises:
+        subprocess.TimeoutExpired: If the child exceeds ``timeout``. Any
+            partial captured output is written to the parent process first.
+    """
+    env = os.environ.copy()
+    if env_updates:
+        env.update(env_updates)
+    if hide_gpu:
+        env["CUDA_VISIBLE_DEVICES"] = ""
+
+    if sys.platform == "win32":
+        source = (
+            "import ctypes as _ctypes;"
+            "_SEM_FAILCRITICALERRORS=0x0001;"
+            "_SEM_NOGPFAULTERRORBOX=0x0002;"
+            "_ctypes.windll.kernel32.SetErrorMode(_SEM_FAILCRITICALERRORS | _SEM_NOGPFAULTERRORBOX);\n"
+            f"{source}"
+        )
+    elif os.name == "posix":
+        source = f"import resource as _resource; _resource.setrlimit(_resource.RLIMIT_CORE, (0, 0));\n{source}"
+
+    try:
+        return subprocess.run(
+            [sys.executable, "-u", "-c", source, *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as error:
+        for stream_name, output in (("stdout", error.stdout), ("stderr", error.stderr)):
+            if not output:
+                continue
+            if isinstance(output, bytes):
+                output_text = output.decode(errors="replace")
+            else:
+                output_text = output
+            print(
+                f"Subprocess {stream_name} before timeout:\n{output_text}",
+                file=sys.stderr,
+                end="" if output_text.endswith("\n") else "\n",
+            )
+        raise
