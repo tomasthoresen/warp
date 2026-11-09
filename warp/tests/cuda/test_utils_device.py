@@ -84,6 +84,8 @@ def _check_runs_on_array_device(test, device, make, expected):
 
     A second CUDA context on the same GPU stands in for the other device.
     """
+    if wp.get_device(device).is_hip:
+        test.skipTest("HIP has one context per device, so a secondary context cannot be created")
     secondary = _SecondaryContext(device)
     try:
         initial, inside_before_launch, inside_after_launch, beside = _run_beside_and_inside_captures(
