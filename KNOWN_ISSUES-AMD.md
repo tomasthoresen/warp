@@ -381,8 +381,9 @@ Skipped on HIP:
 - `test_atomic_cas` spinlock tests — lockstep wavefronts.
 - `test_cuda_profiler` start/stop — `hipProfilerStart` unsupported.
 - `cuda/test_kernel_attributes` external-constant-params case — CUDA-only.
-- `test_fast_math` PTX verification, `aot/test_module_aot` PTX target —
-  CUDA-only.
+- `test_fast_math` PTX verification, `aot/test_module_aot` PTX target and
+  PTX artifact (`test_ptx_artifact_has_no_nul`) — CUDA-only; `use_ptx=True`
+  compiles a binary code object on HIP.
 - `cuda/test_ipc`, `cuda/test_cuda_arch_suffix`, `cuda/test_clang_cuda` —
   CUDA-only.
 - `test_module_parallel_load` no-current-context postcondition — not

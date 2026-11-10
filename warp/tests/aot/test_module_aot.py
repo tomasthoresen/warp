@@ -342,6 +342,11 @@ def test_ptx_artifact_has_no_nul(test, device):
     the terminator back.
     """
 
+    if wp.get_device(device).is_hip:
+        # PTX is NVIDIA-specific IR. On HIP, use_ptx=True compiles a binary code object, so the
+        # text-format check does not apply (the deviceless PTX tests below skip for the same reason).
+        test.skipTest("PTX artifacts are NVIDIA-specific; use_ptx=True compiles a binary code object on HIP")
+
     a = wp.ones(10, dtype=wp.int32, device=device)
     b = wp.ones(10, dtype=wp.int32, device=device)
     res = wp.zeros((10,), dtype=wp.int32, device=device)
