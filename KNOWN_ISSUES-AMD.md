@@ -369,6 +369,9 @@ Skipped on HIP:
 - `test_graph` graph memory-node tests — no `MemAllocNode` on HIP.
 - `test_apic` loaded-conditional-graph rebuild — needs native conditional
   nodes.
+- `test_linear_solvers` `test_solver_capture_replay`, the saved-and-loaded
+  replay of the `use_cuda_graph=True` subtests — needs native conditional
+  nodes; the direct replay of those graphs runs.
 - `deterministic/` GPU tests — deterministic mode not bit-reproducible.
 - `tile/test_tile_shared_memory` `test_tile_shared_mem_large`,
   `tile/test_tile_view` `test_tile_assign_2d`, `tile/test_tile_reduce` 3D
