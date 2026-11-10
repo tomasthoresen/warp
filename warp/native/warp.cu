@@ -4032,8 +4032,7 @@ bool wp_cuda_stream_synchronize(void* stream) { return check_cu(cuStreamSynchron
 // The stream and capture of each event's last record made during a capture. ROCm faults on an
 // external wait on the stream that recorded the event in the same capture. That wait adds no
 // ordering beyond the stream's own, so it is skipped.
-struct HipCaptureRecord
-{
+struct HipCaptureRecord {
     CUstream stream;
     uint64_t capture_id;
 };
@@ -4138,10 +4137,7 @@ int wp_cuda_thread_exchange_capture_mode(int mode)
     return int(capture_mode);
 }
 
-bool wp_cuda_any_capture_active()
-{
-    return !g_captures.empty();
-}
+bool wp_cuda_any_capture_active() { return !g_captures.empty(); }
 
 uint64_t wp_cuda_stream_get_capture_id(void* stream)
 {

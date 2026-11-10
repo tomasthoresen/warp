@@ -4,6 +4,7 @@
 import builtins
 import ctypes
 import errno
+import glob
 import hashlib
 import json
 import ntpath
@@ -72,10 +73,12 @@ def _get_extra_include_dir_bytes(extra_include_dirs) -> list[bytes]:
 # modules keep the smaller/faster release codegen) and only retries without it if
 # the compiler segfaults. Set the env var to 0 to force AOT for all HIP modules
 # (e.g. if a small module hits the trigger). See KNOWN_ISSUES-AMD.md and patches/rocm/.
-WP_HIP_HIPRTC_MAX_SRC_BYTES = int(os.environ.get("WARP_HIP_HIPRTC_MAX_SRC_BYTES", 2_000_000))
+WP_HIP_HIPRTC_MAX_SRC_BYTES = int(os.environ.get("WARP_HIP_HIPRTC_MAX_SRC_BYTES", "2000000"))
 
 
-def _hipcc_genco_cmd(hipcc, cu_path, output_path, arch_suffix, inc_dirs, config, optimization_level, fast_math, fuse_fp, lineinfo, ndebug):
+def _hipcc_genco_cmd(
+    hipcc, cu_path, output_path, arch_suffix, inc_dirs, config, optimization_level, fast_math, fuse_fp, lineinfo, ndebug
+):
     """Build a hipcc --genco command mirroring the HIPRTC options in warp.cu's
     wp_cuda_compile_program. ``ndebug`` controls whether -DNDEBUG is added."""
     cmd = [hipcc, "--genco", f"--offload-arch={arch_suffix}", "-std=c++17", "-fPIC"]
@@ -102,7 +105,9 @@ def _hipcc_genco_cmd(hipcc, cu_path, output_path, arch_suffix, inc_dirs, config,
     return cmd
 
 
-def _build_hip_aot(cu_path, output_path, arch_suffix, inc_dirs, config, optimization_level, fast_math, fuse_fp, lineinfo):
+def _build_hip_aot(
+    cu_path, output_path, arch_suffix, inc_dirs, config, optimization_level, fast_math, fuse_fp, lineinfo
+):
     """Compile a HIP module out-of-process with hipcc --genco. Used for large HIP
     modules so the ROCm clang backend crash (SelectionDAG FoldConstantArithmetic on
     e.g. a uint8 matrix ddot with -DNDEBUG at -O2/-O3) is isolated from the Warp
@@ -120,8 +125,17 @@ def _build_hip_aot(cu_path, output_path, arch_suffix, inc_dirs, config, optimiza
     last = None
     for ndebug in (True, False):
         cmd = _hipcc_genco_cmd(
-            hipcc, cu_path, output_path, arch_suffix, inc_dirs, config, optimization_level, fast_math, fuse_fp,
-            lineinfo, ndebug,
+            hipcc,
+            cu_path,
+            output_path,
+            arch_suffix,
+            inc_dirs,
+            config,
+            optimization_level,
+            fast_math,
+            fuse_fp,
+            lineinfo,
+            ndebug,
         )
         result = subprocess.run(cmd, capture_output=True, text=True)  # noqa: PLW1510
         if result.returncode == 0 and os.path.exists(output_path):
@@ -164,7 +178,6 @@ def build_cuda(
     program_name_bytes = os.path.basename(cu_path).encode("utf-8")
     inc_path = os.path.join(warp_home, "native").encode("utf-8")
     # AMD HIP: hipRTC needs system headers (float.h, stddef.h, etc.)
-    import glob
     gcc_includes = glob.glob("/usr/lib/gcc/x86_64-linux-gnu/*/include")
     hip_extra_includes = gcc_includes[-1] if gcc_includes else "/usr/lib/gcc/x86_64-linux-gnu/13/include"
 
@@ -181,7 +194,7 @@ def build_cuda(
     extra_cuda_include_dirs = _get_extra_include_dir_bytes(extra_include_dirs)
     if is_hip:
         # hipRTC needs the ROCm and GCC system include paths (<hip/hip_runtime.h>, <stddef.h>, ...)
-        extra_cuda_include_dirs = extra_cuda_include_dirs + [b"/opt/rocm/include", hip_extra_includes.encode("utf-8")]
+        extra_cuda_include_dirs = [*extra_cuda_include_dirs, b"/opt/rocm/include", hip_extra_includes.encode("utf-8")]
     num_cuda_include_dirs = len(extra_cuda_include_dirs)
     cuda_include_dirs = (
         (ctypes.c_char_p * num_cuda_include_dirs)(*extra_cuda_include_dirs) if num_cuda_include_dirs else None
@@ -266,10 +279,6 @@ def build_cpu(
         src = cpp.read()
     cpp_path = cpp_path.encode("utf-8")
     inc_path = os.path.join(warp_home, "native").encode("utf-8")
-    # AMD HIP: hipRTC needs system headers (float.h, stddef.h, etc.)
-    import glob
-    gcc_includes = glob.glob("/usr/lib/gcc/x86_64-linux-gnu/*/include")
-    hip_extra_includes = gcc_includes[-1] if gcc_includes else "/usr/lib/gcc/x86_64-linux-gnu/13/include"
     obj_path = obj_path.encode("utf-8")
 
     flags_list = extra_flags.split()
