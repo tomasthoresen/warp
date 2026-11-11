@@ -26,8 +26,8 @@ Differences from CUDA:
   before capture_while()/capture_if() is called", and the streams are left
   capturing.
 - A graph containing conditionals that was saved with `wp.capture_save()`
-  cannot be loaded and launched on HIP; loading rebuilds it with native
-  conditional nodes.
+  loads on HIP, but its first `wp.capture_launch()` raises: the launch
+  rebuilds the graph with native conditional nodes.
 - Launching a split graph blocks the host at each condition read (one small
   stream synchronization per loop iteration or branch). Condition reads from
   concurrent host threads are serialized through one pinned buffer.
@@ -375,7 +375,9 @@ Skipped on HIP:
 - `deterministic/` GPU tests — deterministic mode not bit-reproducible.
 - `tile/test_tile_shared_memory` `test_tile_shared_mem_large`,
   `tile/test_tile_view` `test_tile_assign_2d`, `tile/test_tile_reduce` 3D
-  axis-reduce backward — exceed 64 KB LDS.
+  axis-reduce backward, `tile/test_tile_cholesky_no_mathdx`
+  `test_cholesky_storage_and_blocks` out-of-place 64x64 float64 cases —
+  exceed 64 KB LDS.
 - `tile/test_tile_reduce` Tier 3 axis reduction — open bug (section 2).
 - `tile/test_tile_fft`, `test_tile_solve`, `test_tile_mlp` MathDx cases —
   libmathdx is CUDA-only.
