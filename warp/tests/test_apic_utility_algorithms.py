@@ -148,6 +148,10 @@ def _save_load_array_scan_temp_storage(test, device, conditional):
     for values, dst in zip(original, dsts, strict=True):
         np.testing.assert_array_equal(dst.numpy(), np.cumsum(values) - values)
 
+    if conditional and device.is_hip:
+        # HIP emulates conditionals at capture time only; a loaded graph is rebuilt natively
+        test.skipTest("Rebuilding loaded conditional graphs needs native conditional nodes (not available on HIP)")
+
     inputs = {f"src{i}": src for i, src in enumerate(srcs)}
     outputs = {f"dst{i}": dst for i, dst in enumerate(dsts)}
     with tempfile.TemporaryDirectory() as tmpdir:

@@ -369,6 +369,9 @@ Skipped on HIP:
 - `test_graph` graph memory-node tests — no `MemAllocNode` on HIP.
 - `test_apic` loaded-conditional-graph rebuild — needs native conditional
   nodes.
+- `test_apic_utility_algorithms` the saved-and-loaded `capture_while` scan
+  graph (`test_save_load_array_scan_temp_storage_capture_while`) — needs
+  native conditional nodes; the live replay of that capture runs.
 - `test_linear_solvers` `test_solver_capture_replay`, the saved-and-loaded
   replay of the `use_cuda_graph=True` subtests — needs native conditional
   nodes; the direct replay of those graphs runs.
