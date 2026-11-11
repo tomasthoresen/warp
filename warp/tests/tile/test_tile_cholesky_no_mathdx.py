@@ -413,12 +413,27 @@ def cholesky_storage_inputs(n, dtype, upper, view, inplace=False):
     return padded, matrices, expected
 
 
+def cholesky_storage_fits(device, dtype, n, inplace):
+    """Whether the storage kernel's shared tiles fit the device's opt-in shared memory.
+
+    Out-of-place factoring keeps two n x n shared tiles (the input and the factor) and the kernel
+    reserves a few hundred bytes of static shared memory besides, so two 64x64 float64 tiles need
+    more than a 64 KB block limit (gfx1151's LDS); in-place factoring keeps one tile.
+    """
+    if not device.is_cuda:
+        return True
+    tiles = 1 if inplace else 2
+    return tiles * n * n * wp.types.type_size_in_bytes(dtype) < device.max_shared_memory_per_block
+
+
 def check_cholesky_storage_cases(test, device, cases):
     """Check Cholesky factors, in-place semantics, and input immutability for ``(dtype, n, block_dim, view, upper, inplace)`` cases."""
     tolerances = {wp.float32: (np.float32, 2e-6), wp.float64: (np.float64, 1e-12)}
     for dtype, n, block_dim, view, upper, inplace in cases:
         np_dtype, tol = tolerances[dtype]
         with test.subTest(dtype=dtype, n=n, block_dim=block_dim, upper=upper, inplace=inplace, view=view):
+            if not cholesky_storage_fits(device, dtype, n, inplace):
+                test.skipTest(f"two {n}x{n} {dtype.__name__} shared tiles exceed the device's shared memory per block")
             padded, matrices, expected = cholesky_storage_inputs(n, np_dtype, upper, view, inplace)
             a = wp.array(padded, dtype=dtype, device=device)
             factors = wp.empty((2, n, n), dtype=dtype, device=device)
