@@ -2862,10 +2862,17 @@ def _capture_fill_beside_other_device_fills(device, other_device):
     return capture.graph._apic_capture.operation_count, replayed["own"], other_after_capture
 
 
+def _skip_without_secondary_contexts(test, device):
+    """Skip on devices that have one context, where a second context cannot stand in for another device."""
+    if wp.get_device(device).is_hip:
+        test.skipTest("HIP has one context per device, so a secondary context cannot be created")
+
+
 def test_apic_cuda_fill_other_device_not_recorded(test, device):
     """Run strided and indexed fills on another CUDA device eagerly, without recording them.
 
     A second context on the same GPU stands in for another device."""
+    _skip_without_secondary_contexts(test, device)
     operation_count, own, other = _run_on_secondary_cuda_device(device, _capture_fill_beside_other_device_fills)
 
     test.assertEqual(operation_count, 1)
@@ -2895,6 +2902,7 @@ def test_apic_cuda_fill_under_other_device_recorded(test, device):
     """Record strided and indexed fills on the capture's device while another device is current.
 
     A second context on the same GPU stands in for another device."""
+    _skip_without_secondary_contexts(test, device)
     operation_count, own = _run_on_secondary_cuda_device(device, _capture_fills_under_other_device)
 
     test.assertEqual(operation_count, 2)
@@ -3143,6 +3151,7 @@ def test_apic_cuda_memory_ops_other_device_not_recorded(test, device):
     """Run memsets, fills, and copies on another CUDA device eagerly, without recording them.
 
     A second context on the same GPU stands in for another device."""
+    _skip_without_secondary_contexts(test, device)
     operation_count, own, (zeroed, filled, copied) = _run_on_secondary_cuda_device(
         device, _capture_memory_ops_beside_other_device
     )
@@ -3179,6 +3188,7 @@ def test_apic_cuda_memory_ops_under_other_device_recorded(test, device):
     """Record memsets, fills, and copies on the capture's device while another device is current.
 
     A second context on the same GPU stands in for another device."""
+    _skip_without_secondary_contexts(test, device)
     operation_count, replayed = _run_on_secondary_cuda_device(device, _capture_memory_ops_under_other_device)
 
     test.assertEqual(operation_count, 3)
