@@ -396,6 +396,11 @@ Skipped on HIP:
   CUDA-only.
 - `test_module_parallel_load` no-current-context postcondition — not
   representable in HIP's context API.
+- `cuda/test_utils_device` device tests, the `cuda/test_capture_release`
+  secondary-context tests and the `test_apic` `test_apic_cuda_fill_*` and
+  `test_apic_cuda_memory_ops_*` other-device tests — they stand a second
+  context on the same GPU in for another device; HIP has one context per
+  device.
 - `cuda/test_async`
   `test_copy_s2s_d2d_SrcPoolOff_DstPoolOff_NoStream_Grad_NoGraph_AccessSrcDst`
   — flaky in serial full-suite runs (HSA signal-pool state); passes in
