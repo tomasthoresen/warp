@@ -220,6 +220,49 @@ inline CUDA_CALLABLE void scalar_matmul(const StorageA& A, const StorageB& B, St
     // cannot reach the result through beta * C.
     const bool read_c = Accumulate && beta != T(0);
 
+#if defined(WP_ENABLE_ROCWMMA)
+    // rocWMMA path for 16x16 fp32 results on CDNA: the counterpart of the cuBLASDx path on NVIDIA.
+    // A 16x16x4 fragment is spread over exactly one 64-lane wavefront, so this is taken only when the
+    // block is one wave64 (block_dim 64); every other shape falls through to the scalar GEMM below.
+    //
+    // c_frag starts at zero and accumulates A*B; alpha and beta are applied per element afterwards.
+    // Loading beta * C into the accumulator first would let alpha scale it as well.
+    if constexpr (
+        M == 16 && N == 16 && K % 4 == 0 && sa1 == 1 && sb1 == 1 && sc1 == 1  // unit column strides
+        && WP_TILE_BLOCK_DIM == 64 && WP_TILE_WARP_SIZE == 64 && is_same<ElemA, float>::value
+        && is_same<ElemB, float>::value && is_same<ElemC, float>::value && is_same<T, float>::value
+    ) {
+        rocwmma::fragment<rocwmma::matrix_a, 16, 16, 4, float, rocwmma::row_major> a_frag;
+        rocwmma::fragment<rocwmma::matrix_b, 16, 16, 4, float, rocwmma::row_major> b_frag;
+        rocwmma::fragment<rocwmma::accumulator, 16, 16, 4, float> c_frag;
+
+        rocwmma::fill_fragment(c_frag, 0.0f);
+        for (int k = 0; k < K; k += 4) {
+            rocwmma::load_matrix_sync(a_frag, a_ptr + k, sa0, rocwmma::mem_row_major);
+            rocwmma::load_matrix_sync(b_frag, b_ptr + k * sb0, sb0, rocwmma::mem_row_major);
+            rocwmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+        }
+
+        const float alpha_val = float(alpha);
+        if (read_c) {
+            // C = alpha * A*B + beta * C
+            const float beta_val = float(beta);
+            rocwmma::fragment<rocwmma::accumulator, 16, 16, 4, float> c_in_frag;
+            rocwmma::load_matrix_sync(c_in_frag, c_ptr, sc0, rocwmma::mem_row_major);
+            WP_PRAGMA_UNROLL
+            for (int i = 0; i < (int)c_frag.num_elements; i++)
+                c_frag.x[i] = alpha_val * c_frag.x[i] + beta_val * c_in_frag.x[i];
+        } else if (alpha_val != 1.0f) {
+            // C = alpha * A*B; C is not read
+            WP_PRAGMA_UNROLL
+            for (int i = 0; i < (int)c_frag.num_elements; i++)
+                c_frag.x[i] *= alpha_val;
+        }
+        rocwmma::store_matrix_sync(c_ptr, c_frag, sc0, rocwmma::mem_row_major);
+        return;
+    }
+#endif  // WP_ENABLE_ROCWMMA
+
     for (int t = WP_TILE_THREAD_IDX; t < num_blocks; t += WP_TILE_BLOCK_DIM) {
         const int block_i = t / blocks_n;
         const int block_j = t % blocks_n;

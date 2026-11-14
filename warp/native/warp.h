@@ -719,6 +719,7 @@ WP_API int wp_cuda_device_get_concurrent_managed_access_supported(int ordinal);
 WP_API int wp_cuda_pointer_get_memory_kind(void* context, void* ptr);
 WP_API int wp_cuda_set_memory_coarse_grain(void* context, void* ptr, size_t size);  // HIP only; 1 on success
 WP_API int wp_cuda_device_is_mempool_supported(int ordinal);
+WP_API int wp_cuda_device_is_texture_supported(int ordinal);  // 0 on HIP devices without image support
 WP_API int wp_cuda_device_is_ipc_supported(int ordinal);
 WP_API int wp_cuda_device_set_mempool_release_threshold(int ordinal, uint64_t threshold);
 WP_API uint64_t wp_cuda_device_get_mempool_release_threshold(int ordinal);

@@ -433,6 +433,13 @@ class Texture:
         device = warp._src.context.get_device(device)
         self._runtime = warp._src.context.runtime
 
+        if not device.is_texture_supported:
+            # HIP devices without image support (CDNA): creation would fail with error 801
+            raise RuntimeError(
+                f"Textures are not supported on device '{device}': the device has no image support. "
+                "Check Device.is_texture_supported before creating a texture."
+            )
+
         # None selects a dtype-dependent default after the dtype is resolved.
         if filter_mode is not None:
             try:

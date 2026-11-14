@@ -68,6 +68,9 @@ This port is **validated only on `gfx1151`** (AMD Radeon 8060S / Strix Halo iGPU
 | `gfx1100`, `gfx1101`, `gfx1102` | Buildable | RDNA 3 dGPU; untested |
 | `gfx1030` | Buildable | RDNA 2; untested |
 
+| `gfx942`, `gfx950` | Buildable | Instinct (CDNA 3, wave64); see [Instinct targets](#instinct-targets) |
+| `gfx1036` | Buildable | Raphael iGPU; runtime defects in `KNOWN_ISSUES-AMD.md` |
+
 If you run on something other than gfx1151 — pass or fail — please open an issue.
 
 Confirm your GPU:
@@ -77,6 +80,102 @@ rocminfo | grep -E 'Name:|gfx'
 # or, if rocminfo is not on PATH:
 find /opt/rocm -name rocminfo -executable 2>/dev/null
 ```
+
+### Instinct targets
+
+The Instinct parts (`gfx942`: MI300A/MI300X/MI325X, `gfx950`: MI350X/MI355X)
+build with the same script, one or several architectures per library:
+
+```bash
+HIP_ARCH=gfx942,gfx950 ./build_amd.sh
+```
+
+`docker/rocm/Dockerfile` has one image per target (`--target warp_gfx942` on
+ROCm 7.2, `--target warp_gfx950` on ROCm 10.1.0); see
+[Instinct images](#instinct-images) below. What differs from gfx1151:
+
+- **Wavefront width.** CDNA runs 64-lane wavefronts; the tile lane masks follow
+  the target family (`WP_TILE_WARP_SIZE` is 64 on gfx9).
+- **`wp.tile_matmul` uses rocWMMA** where it applies: a 16x16 `float` result,
+  `float` operands, and `block_dim=64` (one wavefront per block) run on the
+  fp32 16x16x4 MFMA instruction. Other shapes, other block sizes and all RDNA
+  targets use the scalar GEMM. The path needs the rocWMMA headers
+  (`<rocm>/include/rocwmma`); without them it is compiled out. The
+  `"hip_tile_rocwmma"` module option set to `False` builds a module without
+  it. Measured numbers are under
+  [rocWMMA `tile_matmul` timing](#rocwmma-tile_matmul-timing).
+- **No textures.** CDNA devices have no image support, so `wp.Texture1D/2D/3D`
+  cannot be created there. `Device.is_texture_supported` is `False`, creation
+  raises a `RuntimeError` saying so, and the texture tests skip.
+- **Architecture names carry target features** (`gfx950:sramecc+:xnack-`).
+  Kernel-cache file names spell the colons as `_`.
+
+ROCm installed from the TheRock pip wheels (`rocm[devel]`, which puts the SDK
+in `site-packages/_rocm_sdk_devel` and leaves `ROCM_PATH` unset) is found
+without configuration: kernel compiles look for the ROCm headers under
+`ROCM_PATH`/`ROCM_HOME`/`HIP_PATH`, `/opt/rocm`, those wheel packages, and next
+to a `hipcc` on `PATH`, in that order.
+
+On Instinct hardware this has been run on one MI355X node (gfx950, ROCm 7.15
+on the host): the build, the rocWMMA tests and timing below, and both images.
+gfx942 hardware is untested.
+
+#### rocWMMA `tile_matmul` timing
+
+`tools/bench_tile_rocwmma.py` builds each kernel twice, with and without the
+rocWMMA path (the `"hip_tile_rocwmma"` module option), and times both on the
+same inputs. One tile is one 64-thread block: load a 16xK and a Kx16 tile,
+multiply into a 16x16 tile, store. MI355X (gfx950), ROCm 7.15, 262144 tiles
+per launch, median of 15 synchronized samples of at least 0.2 s each:
+
+| Kernel | rocWMMA | Scalar GEMM | Speedup |
+|---|---|---|---|
+| 16x16, K=16: load, multiply, store | 0.137 ms | 0.199 ms | 1.46x |
+| 16x16, K=32: load, multiply, store | 0.223 ms | 0.344 ms | 1.54x |
+| 16x16, K=64: load, multiply, store | 0.409 ms | 0.640 ms | 1.56x |
+| 16x16, K=16, `alpha`/`beta`: load, multiply, store | 0.179 ms | 0.272 ms | 1.52x |
+| 16x16, K=16: 64 multiplies per tile | 47.0 GFLOP/s | 13.0 GFLOP/s | 3.62x |
+| 16x16, K=32: 64 multiplies per tile | 32.6 GFLOP/s | 14.2 GFLOP/s | 2.30x |
+| 16x16, K=64: 64 multiplies per tile | 34.6 GFLOP/s | 14.8 GFLOP/s | 2.33x |
+| 16x16, K=16, `alpha`/`beta`: 64 multiplies per tile | 47.1 GFLOP/s | 13.0 GFLOP/s | 3.63x |
+
+The quartiles are within 1% of the medians except K=32, where the upper
+quartile is up to 11% above. At 16384 and 1048576 tiles the ratios are
+similar (1.45x to 1.66x, and 2.2x to 3.7x for 64 multiplies). At 1024 tiles a
+single multiply per tile is lost in the launch overhead (4-5 µs either way).
+The two builds return bit-identical results in every case.
+
+Shapes and block sizes outside the path (16x16 at `block_dim=128`, 32x32,
+64x64) compile to the same instructions with the option on or off.
+
+#### Instinct images
+
+Build from the repository root; `--network=host` is only needed where the
+default bridge has no route out:
+
+```bash
+docker build --network=host -f docker/rocm/Dockerfile --target warp_gfx950 -t warp-rocm:gfx950 .
+docker build --network=host -f docker/rocm/Dockerfile --target warp_gfx942 -t warp-rocm:gfx942 .
+```
+
+The gfx942 target takes other architectures through
+`--build-arg HIP_ARCH=gfx942,gfx950`. Both images include the rocWMMA headers
+and a ROCm build of PyTorch, and are about 40 GB each.
+
+Run with the GPU device nodes passed through. Give the render group by the
+host's numeric id: the gfx950 image has no `render` group and the gfx942
+image's has a different id.
+
+```bash
+docker run --rm --device=/dev/kfd --device=/dev/dri \
+  --group-add video --group-add "$(getent group render | cut -d: -f3)" \
+  warp-rocm:gfx950 \
+  bash -c 'python tools/run_gfx1151_smoke.py && python -m unittest warp.tests.cuda.test_tile_rocwmma'
+```
+
+`-e HIP_VISIBLE_DEVICES=0` selects a GPU. The smoke test warns that it is not
+on gfx1151 and passes. Both images pass this on an MI355X, the gfx942 image
+when built with `HIP_ARCH=gfx942,gfx950`.
 
 ## Choosing a ROCm version
 

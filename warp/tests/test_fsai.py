@@ -763,7 +763,15 @@ def test_block_selection_matches_scalar(test, device, dtype):
             deferred = FSAI(_topology_only(a, device, dtype, block), reuse_pattern=True, defer_pattern=True, **options)
             deferred.source.values.assign(raw.values.numpy())
             deferred.update()
-            np.testing.assert_array_equal(_dense(deferred.G), _dense(scalar.G))
+            # The deferred factor comes from the refit kernel, so it must equal a refit of the supports
+            # selected at construction bit for bit. Construction itself runs a different kernel, in
+            # which the compiler may contract multiply-adds differently, so its values (compared here
+            # on the scalar-expanded matrix) only agree to rounding.
+            refit = FSAI(raw, reuse_pattern=True, **options)
+            refit.update()
+            np.testing.assert_array_equal(_dense(deferred.G), _dense(refit.G))
+            eps = np.finfo(wp.dtype_to_numpy(dtype)).eps
+            np.testing.assert_allclose(_dense(deferred.G), _dense(scalar.G), rtol=16 * eps, atol=0)
 
 
 def test_cached_views_follow_arrays(test, device):
