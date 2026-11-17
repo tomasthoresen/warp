@@ -4331,6 +4331,8 @@ bool wp_cuda_graph_begin_capture(void* context, void* stream, int external, int 
     return true;
 }
 
+// The root-kernel workaround targets NVIDIA drivers before R580 and uses CUDA-only graph calls.
+#if !defined(__HIP_PLATFORM_AMD__)
 static __global__ void graph_root_kernel() { }
 
 // Pre-R580 drivers can run a graph's first non-kernel node (e.g., a memset) before
@@ -4373,6 +4375,7 @@ static bool insert_graph_root_kernel(cudaGraph_t cuda_graph)
     return check_cuda(cudaGraphAddDependencies(cuda_graph, from.data(), roots.data(), num_roots));
 #endif
 }
+#endif  // !defined(__HIP_PLATFORM_AMD__)
 
 bool wp_cuda_graph_end_capture(void* context, void* stream, void** graph_ret)
 {
@@ -4543,10 +4546,12 @@ bool wp_cuda_graph_end_capture(void* context, void* stream, void** graph_ret)
         run_deferred_actions();
     }
 
+#if !defined(__HIP_PLATFORM_AMD__)
     if (wp_cuda_driver_version() < 13000 && !insert_graph_root_kernel(graph)) {
         cudaGraphDestroy(graph);
         return false;
     }
+#endif
 
     if (graph_ret)
         *graph_ret = graph;
