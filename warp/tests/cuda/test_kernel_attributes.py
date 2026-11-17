@@ -265,7 +265,12 @@ def test_cuda_kernel_properties_accept_generic_overload(test, device):
         block_dim=ATTRIBUTE_BLOCK_DIM,
     )
 
-    test.assertGreater(properties["register_count"], 0)
+    if device.is_hip:
+        # The kernel stores an element back onto itself. The ROCm compiler removes
+        # the whole body, and HIP reports no registers for the empty kernel.
+        test.assertGreaterEqual(properties["register_count"], 0)
+    else:
+        test.assertGreater(properties["register_count"], 0)
     test.assertGreaterEqual(properties["local_memory_size"], 0)
 
 
