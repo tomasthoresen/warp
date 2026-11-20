@@ -373,7 +373,7 @@ Skipped on HIP:
   graph (`test_save_load_array_scan_temp_storage_capture_while`) — needs
   native conditional nodes; the live replay of that capture runs.
 - `test_linear_solvers` `test_solver_capture_replay`, the saved-and-loaded
-  replay of the `use_cuda_graph=True` subtests — needs native conditional
+  replay of the `use_graph=True` subtests — needs native conditional
   nodes; the direct replay of those graphs runs.
 - `deterministic/` GPU tests — deterministic mode not bit-reproducible.
 - `tile/test_tile_shared_memory` `test_tile_shared_mem_large`,
