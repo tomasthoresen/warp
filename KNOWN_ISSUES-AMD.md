@@ -379,7 +379,8 @@ Skipped on HIP:
 - `tile/test_tile_shared_memory` `test_tile_shared_mem_large`,
   `tile/test_tile_view` `test_tile_assign_2d`, `tile/test_tile_reduce` 3D
   axis-reduce backward, `tile/test_tile_cholesky_no_mathdx`
-  `test_cholesky_storage_and_blocks` out-of-place 64x64 float64 cases —
+  `test_cholesky_storage_and_blocks` out-of-place 64x64 float64 cases,
+  `tile/test_tile_ldlt` `test_ldlt_forward` 64x64 float64 cases —
   exceed 64 KB LDS.
 - `tile/test_tile_reduce` Tier 3 axis reduction — open bug (section 2).
 - `tile/test_tile_fft`, `test_tile_solve`, `test_tile_mlp` MathDx cases —
