@@ -1,0 +1,1 @@
+Fix `wp.capture_debug_dot_print()` raising "invalid argument" on HIP for graphs that contain `wp.capture_while()` or `wp.capture_if()`. The DOT file holds one `digraph` per native graph the capture was split into.
