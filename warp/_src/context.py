@@ -13340,9 +13340,65 @@ def capture_debug_dot_print(graph: Graph, path: str, verbose: bool = True):
         graph: A :class:`Graph` as returned by :func:`~warp.capture_end()`
         path: Path to save the DOT file
         verbose: Whether to include additional debug information in the output
+
+    On HIP, a graph containing :func:`~warp.capture_while()` or :func:`~warp.capture_if()` is replayed as
+    several native graphs. Its DOT file holds one ``digraph`` per native graph, in launch order, each preceded
+    by a ``//`` comment naming it.
     """
+    if graph._hip_items:
+        _hip_debug_dot_print(graph, path, verbose)
+        return
+
+    _build_loaded_cuda_graph(graph)
     if not runtime.core.wp_capture_debug_dot_print(graph.graph, path.encode(), 1 if verbose else 0):
         raise RuntimeError(f"Graph debug dot print error: {runtime.get_error_string()}")
+
+
+def _build_loaded_cuda_graph(graph: Graph):
+    """Build the CUDA graph of a loaded graph that has not been launched yet; it is otherwise built on first launch."""
+    if not graph.graph and graph._native_graph is not None:
+        cuda_graph = runtime.core.wp_apic_get_cuda_graph(graph._native_graph)
+        if not cuda_graph:
+            raise RuntimeError(f"Failed to build CUDA graph from APIC: {runtime.get_error_string()}")
+        graph.graph = ctypes.c_void_p(cuda_graph)
+
+
+def _hip_debug_dot_print(graph: Graph, path: str, verbose: bool):
+    """Export a split HIP graph: one ``digraph`` per native piece, in launch order, each preceded by a comment
+    naming the piece. The conditions are read on the host at launch and are not part of any piece."""
+    pieces = []
+
+    def collect(g: Graph, label: str):
+        if not g._hip_items:
+            pieces.append((label, g))
+            return
+        prefix = f"{label}, " if label else ""
+        for index, item in enumerate(g._hip_items):
+            kind = item[0]
+            if kind == "graph":
+                collect(item[1], f"{prefix}piece {index}")
+            elif kind == "while":
+                collect(item[2], f"{prefix}piece {index}: while body")
+            else:
+                for body, name in zip(item[2:], ("if body", "else body"), strict=False):
+                    if body is not None:
+                        collect(body, f"{prefix}piece {index}: {name}")
+
+    collect(graph, "")
+    with tempfile.TemporaryDirectory() as folder:
+        piece_path = os.path.join(folder, "piece.dot")
+        text = []
+        for label, piece in pieces:
+            _build_loaded_cuda_graph(piece)
+            if not runtime.core.wp_capture_debug_dot_print(piece.graph, piece_path.encode(), 1 if verbose else 0):
+                raise RuntimeError(f"Graph debug dot print error: {runtime.get_error_string()}")
+            with open(piece_path) as f:
+                text.append(f"// {label}\n{f.read().rstrip()}\n")
+    try:
+        with open(path, "w") as f:
+            f.write("\n".join(text))
+    except OSError as e:
+        raise RuntimeError(f"Graph debug dot print error: {e}") from e
 
 
 def assert_conditional_graph_support():

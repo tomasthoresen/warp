@@ -31,6 +31,9 @@ Differences from CUDA:
 - Launching a split graph blocks the host at each condition read (one small
   stream synchronization per loop iteration or branch). Condition reads from
   concurrent host threads are serialized through one pinned buffer.
+- `wp.capture_debug_dot_print()` of a split graph writes one `digraph` per
+  piece, in launch order, each preceded by a `//` comment naming the piece.
+  The host-side condition reads are not graph nodes and do not appear.
 
 ### External events in replayed graphs
 
