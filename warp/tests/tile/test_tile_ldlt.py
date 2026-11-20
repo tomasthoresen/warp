@@ -145,6 +145,9 @@ def test_ldlt_forward(test, device):
         ):
             for upper in (False, True):
                 with test.subTest(dtype=dtype, n=n, upper=upper, view=view, helper=helper):
+                    if n == 64 and dtype == wp.float64 and wp.get_device(device).is_hip:
+                        # the factor kernel requests 65840 bytes of shared memory for these tiles
+                        test.skipTest("Exceeds the 64 KB of shared memory (LDS) available per block on HIP")
                     matrices = ldlt_matrices(n).astype(precision)
                     matrices = np.concatenate(
                         (
