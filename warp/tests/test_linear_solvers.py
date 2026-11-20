@@ -1771,7 +1771,7 @@ def test_solver_capture_replay(test, device):
                             x.numpy(), np.linalg.solve(A_np, scale * b_np), rtol=1.0e-8, atol=1.0e-8
                         )
 
-                    if use_cuda_graph and wp.get_device(device).is_hip:
+                    if use_graph and wp.get_device(device).is_hip:
                         # HIP emulates conditionals at capture time only; a loaded graph is rebuilt natively
                         test.skipTest(
                             "Rebuilding loaded conditional graphs needs native conditional nodes (not available on HIP)"
