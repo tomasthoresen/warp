@@ -772,46 +772,56 @@ static int process_deferred_graph_destroy_callbacks(void* context = NULL)
 {
     int num_freed = 0;
 
-    std::lock_guard<std::mutex> lock(g_graph_destroy_mutex);
-
-    for (auto it = g_deferred_graph_destroy_list.begin(); it != g_deferred_graph_destroy_list.end(); /*noop*/) {
-        GraphDestroyCallbackInfo* graph_info = *it;
-        if (graph_info->context == context || !context) {
-            // handle unfreed graph allocations (may have outstanding user references)
-            for (void* ptr : graph_info->unfreed_allocs) {
-                auto alloc_iter = g_graph_allocs.find(ptr);
-                if (alloc_iter != g_graph_allocs.end()) {
-                    // unlink this allocation from the destroyed graph
-                    // and free it if no user reference remains
-                    GraphAllocInfo& alloc_info = alloc_iter->second;
-                    alloc_info.graph_destroyed = true;
-                    if (!alloc_info.ref_exists) {
-                        wp_free_device_async(alloc_info.context, ptr);
-                    }
-                }
+    // Take the matching entries off the shared list first and release them without the lock.
+    // Freeing can synchronize the device (a plain free of a stable capture allocation on HIP does),
+    // and a runtime that completes another destroyed graph inside that call runs on_graph_destroy()
+    // on this thread, which would then wait on the mutex this function still held.
+    std::vector<GraphDestroyCallbackInfo*> ready;
+    {
+        std::lock_guard<std::mutex> lock(g_graph_destroy_mutex);
+        for (auto it = g_deferred_graph_destroy_list.begin(); it != g_deferred_graph_destroy_list.end(); /*noop*/) {
+            GraphDestroyCallbackInfo* graph_info = *it;
+            if (graph_info->context == context || !context) {
+                ready.push_back(graph_info);
+                it = g_deferred_graph_destroy_list.erase(it);
+            } else {
+                ++it;
             }
-
-            // handle temporary allocations owned by the graph (no user references)
-            for (const FreeInfo& tmp_info : graph_info->tmp_allocs) {
-                if (tmp_info.context) {
-                    // GPU alloc
-                    if (tmp_info.is_async) {
-                        wp_free_device_async(tmp_info.context, tmp_info.ptr);
-                    } else {
-                        wp_free_device_default(tmp_info.context, tmp_info.ptr);
-                    }
-                } else {
-                    // CPU alloc
-                    wp_free_host(tmp_info.ptr);
-                }
-            }
-
-            ++num_freed;
-            delete graph_info;
-            it = g_deferred_graph_destroy_list.erase(it);
-        } else {
-            ++it;
         }
+    }
+
+    for (GraphDestroyCallbackInfo* graph_info : ready) {
+        // handle unfreed graph allocations (may have outstanding user references)
+        for (void* ptr : graph_info->unfreed_allocs) {
+            auto alloc_iter = g_graph_allocs.find(ptr);
+            if (alloc_iter != g_graph_allocs.end()) {
+                // unlink this allocation from the destroyed graph
+                // and free it if no user reference remains
+                GraphAllocInfo& alloc_info = alloc_iter->second;
+                alloc_info.graph_destroyed = true;
+                if (!alloc_info.ref_exists) {
+                    wp_free_device_async(alloc_info.context, ptr);
+                }
+            }
+        }
+
+        // handle temporary allocations owned by the graph (no user references)
+        for (const FreeInfo& tmp_info : graph_info->tmp_allocs) {
+            if (tmp_info.context) {
+                // GPU alloc
+                if (tmp_info.is_async) {
+                    wp_free_device_async(tmp_info.context, tmp_info.ptr);
+                } else {
+                    wp_free_device_default(tmp_info.context, tmp_info.ptr);
+                }
+            } else {
+                // CPU alloc
+                wp_free_host(tmp_info.ptr);
+            }
+        }
+
+        ++num_freed;
+        delete graph_info;
     }
 
     return num_freed;
