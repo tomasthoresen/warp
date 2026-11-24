@@ -78,6 +78,38 @@ def accum_kernel(a: wp.array[float], b: wp.array[float]):
 graph_module_load_devices = get_test_devices_with_cuda_graph_module_load("all")
 
 
+@wp.kernel
+def _busy_accumulate(total: wp.array[float], scratch: wp.array[float], iterations: int):
+    i = wp.tid()
+    s = float(0.0)
+    for k in range(iterations):
+        s += wp.sin(float(k)) * 1.0e-9
+    scratch[i] = s
+    total[i] = total[i] + 1.0
+
+
+def test_graph_release_during_capture_while_another_graph_runs(test, device):
+    """Ending a capture releases earlier graphs' allocations while a later graph is still running."""
+    total = wp.zeros(1 << 16, dtype=float, device=device)
+    wp.load_module(device=device)
+
+    num_graphs = 8
+    for i in range(num_graphs):
+        # Rebinding ``capture`` releases the previous graph inside the new capture. Short and long
+        # graphs alternate, so a finished graph's allocation is released while its successor runs.
+        with wp.ScopedCapture(device, force_module_load=False) as capture:
+            scratch = wp.zeros(total.size, dtype=float, device=device)
+            wp.launch(
+                _busy_accumulate, dim=total.size, inputs=[total, scratch, 400000 if i % 2 else 100], device=device
+            )
+            del scratch
+        wp.capture_launch(capture.graph)
+
+    del capture
+    wp.synchronize_device(device)
+    np.testing.assert_array_equal(total.numpy(), np.full(total.size, num_graphs, dtype=np.float32))
+
+
 class TestGraph(unittest.TestCase):
     def test_cuda_graph_memory_bindings(self):
         core = wp._src.context.runtime.core
@@ -1587,6 +1619,13 @@ _topo_tests = [
 ]
 for _topo_test in _topo_tests:
     add_function_test(TestGraph, _topo_test.__name__, _topo_test, devices=graph_mem_node_devices)
+add_function_test(
+    TestGraph,
+    "test_graph_release_during_capture_while_another_graph_runs",
+    test_graph_release_during_capture_while_another_graph_runs,
+    devices=get_selected_cuda_test_devices_with_mempool(),
+)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
