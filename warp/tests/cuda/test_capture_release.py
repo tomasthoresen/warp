@@ -264,6 +264,38 @@ def test_destroyed_context_discards_queued_releases(test, device):
             other.close()
 
 
+@wp.kernel
+def _busy_accumulate(total: wp.array[float], scratch: wp.array[float], iterations: int):
+    i = wp.tid()
+    s = float(0.0)
+    for k in range(iterations):
+        s += wp.sin(float(k)) * 1.0e-9
+    scratch[i] = s
+    total[i] = total[i] + 1.0
+
+
+def test_graph_release_during_capture_while_another_graph_runs(test, device):
+    """Ending a capture releases earlier graphs' allocations while a later graph is still running."""
+    total = wp.zeros(1 << 16, dtype=float, device=device)
+    wp.load_module(device=device)
+
+    num_graphs = 8
+    for i in range(num_graphs):
+        # Rebinding ``capture`` releases the previous graph inside the new capture. Short and long
+        # graphs alternate, so a finished graph's allocation is released while its successor runs.
+        with wp.ScopedCapture(device, force_module_load=False) as capture:
+            scratch = wp.zeros(total.size, dtype=float, device=device)
+            wp.launch(
+                _busy_accumulate, dim=total.size, inputs=[total, scratch, 400000 if i % 2 else 100], device=device
+            )
+            del scratch
+        wp.capture_launch(capture.graph)
+
+    del capture
+    wp.synchronize_device(device)
+    np.testing.assert_array_equal(total.numpy(), np.full(total.size, num_graphs, dtype=np.float32))
+
+
 class TestCaptureRelease(unittest.TestCase):
     pass
 
@@ -301,6 +333,12 @@ add_function_test(
     "test_destroyed_context_discards_queued_releases",
     test_destroyed_context_discards_queued_releases,
     devices=devices,
+)
+add_function_test(
+    TestCaptureRelease,
+    "test_graph_release_during_capture_while_another_graph_runs",
+    test_graph_release_during_capture_while_another_graph_runs,
+    devices=mempool_devices,
 )
 
 
