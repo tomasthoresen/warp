@@ -887,6 +887,39 @@ def test_tile_reduce_simt(test, device):
     test.assertEqual(output.numpy()[0], np.sum(np.arange(N)))
 
 
+@wp.kernel(module="tile_reduce_partial_block")
+def tile_reduce_partial_block_kernel(values: wp.array[int], total: wp.array[int], squares: wp.array[int]):
+    i = wp.tid()
+
+    value = int(values[i])
+    t = wp.tile(value)
+    wp.tile_atomic_add(total, wp.tile_sum(t))
+    wp.tile_atomic_add(squares, wp.tile_dot(t, t))
+
+
+def test_tile_reduce_partial_block(test, device):
+    # A launch that does not fill its last block: fewer threads run than the block has warps,
+    # as few as one. The reductions must count the running threads only.
+    block_dim = 256
+
+    for n in (block_dim, 1, 3, 2 * block_dim + 1, block_dim, 2):
+        values_np = np.arange(1, n + 1, dtype=np.int32)
+        values = wp.array(values_np, dtype=int, device=device)
+        total = wp.zeros(shape=1, dtype=int, device=device)
+        squares = wp.zeros(shape=1, dtype=int, device=device)
+
+        wp.launch(
+            tile_reduce_partial_block_kernel,
+            dim=n,
+            inputs=[values, total, squares],
+            block_dim=block_dim,
+            device=device,
+        )
+
+        test.assertEqual(total.numpy()[0], int(np.sum(values_np)), msg=f"sum, dim={n}")
+        test.assertEqual(squares.numpy()[0], int(np.sum(values_np * values_np)), msg=f"dot, dim={n}")
+
+
 # Tier 1: axis size <= 32
 @wp.kernel
 def tile_reduce_axis_tier1_sum_axis0_kernel(x: wp.array2d[float], y: wp.array[float]):
@@ -1650,6 +1683,9 @@ add_function_test(
 )
 add_function_test(TestTileReduce, "test_tile_reduce_grouped_sum", test_tile_reduce_grouped_sum, devices=devices)
 add_function_test(TestTileReduce, "test_tile_reduce_simt", test_tile_reduce_simt, devices=devices)
+add_function_test(
+    TestTileReduce, "test_tile_reduce_partial_block", test_tile_reduce_partial_block, devices=get_cuda_test_devices()
+)
 add_function_test(
     TestTileReduce,
     "test_tile_sum_axis_gradients",

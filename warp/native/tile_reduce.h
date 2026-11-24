@@ -374,8 +374,13 @@ template <typename Tile, typename Op> CUDA_CALLABLE_DEVICE auto tile_reduce_impl
         const int warp_index = threadIdx.x / WP_TILE_WARP_SIZE;
         const int lane_index = threadIdx.x % WP_TILE_WARP_SIZE;
 
-        if (threadIdx.x < warp_count)
-            warp_valid[threadIdx.x] = 0;
+        // Thread 0 runs in every launched block. A launch that does not fill its
+        // last block can run fewer threads than the block has warps, so the flags
+        // cannot be cleared one per thread.
+        if (threadIdx.x == 0) {
+            for (int w = 0; w < warp_count; ++w)
+                warp_valid[w] = 0;
+        }
 
         WP_TILE_SYNC();
 
@@ -1156,8 +1161,13 @@ template <typename TileA, typename TileB> CUDA_CALLABLE auto tile_dot(TileA& a, 
         const int warp_index = threadIdx.x / WP_TILE_WARP_SIZE;
         const int lane_index = threadIdx.x % WP_TILE_WARP_SIZE;
 
-        if (threadIdx.x < warp_count)
-            warp_valid[threadIdx.x] = 0;
+        // Thread 0 runs in every launched block. A launch that does not fill its
+        // last block can run fewer threads than the block has warps, so the flags
+        // cannot be cleared one per thread.
+        if (threadIdx.x == 0) {
+            for (int w = 0; w < warp_count; ++w)
+                warp_valid[w] = 0;
+        }
         WP_TILE_SYNC();
 
         tile_mask_t mask = __ballot_sync(tile_full_mask, has_data);
