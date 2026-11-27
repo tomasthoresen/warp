@@ -89,6 +89,22 @@ safe on managed memory Warp did not allocate that way, such as
 `CudaManagedAllocator` arrays.
 Integer atomics are unaffected.
 
+### Multiply-add contraction differs between kernels
+
+With `fuse_fp` enabled (the default) HIP kernels are compiled with
+`-ffp-contract=fast`, which lets the AMDGPU backend decide per kernel which
+multiplies fuse into a following add or subtract. Two kernels that perform
+the same arithmetic in the same order can therefore differ by a few ULP.
+Seen on gfx950 in `test_fsai`: in the FSAI refit kernel, whose loops have
+constant bounds, the compiler emits packed fp32 multiplies (`v_pk_mul_f32`)
+and leaves many subtractions unfused (138 `v_sub_f32` against 1 in the
+construction kernel, which fuses the same expressions into `v_fma_f32`). The
+two factors differ in 1 of 324 and 2 of 729 entries by at most 3.1 fp32 eps;
+fp64 and fp16 are bitwise equal there. Results are deterministic, and equal
+bit for bit with `fuse_fp=False`, at `-O1`, in debug mode and on the CPU
+device. Code that needs two kernels to agree bitwise must set the
+`"fuse_fp"` module option to `False`.
+
 ### 64 KB shared memory (LDS)
 
 gfx1151 LDS is a hard 64 KB; CUDA devices from sm_75 can opt into more. Tile
@@ -222,6 +238,27 @@ partly `test_heightfield` and `test_remesh`); the failing call is an ordinary
 `wp.array` in `builder.finalize()`. ROCm 7.2.x does not show it. Mechanism not
 established. Workaround: ROCm 7.2.x for affected workloads.
 
+### gfx1036 (Raphael iGPU): unsynchronized work is dropped, hipCUB radix sort is wrong
+
+Seen on the Ryzen 7000 desktop iGPU (gfx1036, RDNA 2) with ROCm from the
+TheRock 10.1.0 wheels (HIP 7.16). Both reproduce without Warp.
+
+- **Asynchronous work is silently dropped.** A copy, memset or kernel launch
+  that is not followed by a synchronization, issued after the device has been
+  idle for about 1 ms, never executes and reports no error; later reads see
+  the old contents. Reproducible with plain HIP calls. Workaround: set
+  `AMD_SERIALIZE_COPY=3 AMD_SERIALIZE_KERNEL=3` in the environment, which
+  makes the runtime wait before and after each copy and kernel.
+- **hipCUB radix sort returns wrong results.**
+  `hipcub::DeviceRadixSort::SortPairs` returns output that is not sorted; a
+  standalone hipCUB program shows it. No workaround. Everything built on
+  `wp.utils.radix_sort_pairs` and `wp.utils.segmented_sort_pairs` is
+  unreliable there, including LBVH construction, hash grids and sparse-matrix
+  assembly, and so are the tests that cover them.
+
+Platform limitation (ROCm runtime on gfx1036). Neither is reported on
+gfx1151, and the same hipCUB sorts are correct on gfx950.
+
 ### Scratch allocation limit
 
 A kernel whose scratch need exceeds ROCm's `HSA_SCRATCH_SINGLE_LIMIT` gets a new
@@ -298,6 +335,16 @@ without `-DNDEBUG` if the compiler crashes. A small module containing such a
 kernel still compiles through HIPRTC; set `WARP_HIP_HIPRTC_MAX_SRC_BYTES=0`.
 Platform limitation (ROCm compiler).
 
+### Textures on Instinct (CDNA) devices
+
+CDNA devices (gfx942, gfx950) report no image support
+(`hipDeviceAttributeImageSupport` is 0) and every array or texture-object
+creation returns "operation not supported" (error 801).
+`Device.is_texture_supported` is `False` there, creating a `wp.Texture1D`,
+`wp.Texture2D` or `wp.Texture3D` raises a `RuntimeError` naming the device,
+and `cuda/test_texture` and `cuda/test_texture_compiler` skip. Platform
+limitation.
+
 ### Mipmapped arrays
 
 `hipMipmappedArrayCreate` returns "operation not supported" (error 801) on
@@ -317,6 +364,52 @@ is broken from boot. Check with
 `journalctl -k -b 0 | grep -c "Fence fallback timer expired"`: a nonzero,
 rising count identifies that state; reboot. `HSA_ENABLE_INTERRUPT=0` masks it.
 Affects `test_optim` `example_fluid_checkpoint` intermittently.
+
+The same spin also occurs sporadically without that driver state. On an
+MI355X SR-IOV virtual function (gfx950, ROCm 7.15, amdgpu-dkms 7.1.3, fence
+count zero) `test_grad` `test_mesh_grad_cuda_0` hangs in about 1 % of fresh
+processes: 6 of 318 runs of the test, 12 of 1320 runs of its body, none in
+1080 runs with `HSA_ENABLE_INTERRUPT=0`. The whole module otherwise takes
+28 s with a cold kernel cache and 1.2 s warm. The main thread spins in
+`sched_yield` inside `hipFree`, called from the scan in
+`wp_mesh_create_device` to release its temporary buffer while the scan
+kernels are still queued; the GPU is idle and the kernel log is silent.
+In one trial, calling `hipStreamSynchronize` or `hipDeviceSynchronize`
+immediately before the `hipFree` gave no hang in about 2800 runs, against 3
+in about 900 unmodified runs over the same minutes; the trial was cut short
+and the change is not adopted. The four hangs whose onset was timed fell
+within 21 s of the extrapolated 150 s schedule on which the node's
+`amd-metrics-exporter` runs `rocpctl`, which toggles the performance counters
+of every compute queue; that link is not established. Reproduce with:
+
+```sh
+for i in $(seq 300); do
+  WARP_CACHE_PATH=$(mktemp -d) timeout -s KILL 60 \
+    python -m unittest warp.tests.test_grad -k test_mesh_grad_cuda \
+    >/dev/null 2>&1 || echo "run $i hung or failed"
+done
+```
+
+Run only a few such loops at a time on a node that runs the exporter; see
+"KFD deadlock with the metrics exporter's profiler" below. Platform
+limitation; workaround `HSA_ENABLE_INTERRUPT=0`.
+
+### KFD deadlock with the metrics exporter's profiler
+
+amdgpu-dkms 7.1.3 takes two KFD locks in opposite orders. Tearing down a
+process that enabled performance counters holds `profiler_lock` and takes the
+queue-manager lock (`kfd_process_destroy_pdds` → `set_perfcount`); creating a
+compute queue holds the queue-manager lock and takes `profiler_lock`
+(`create_queue_cpsch` → `init_mqd`). When a `rocpctl` run of
+`amd-metrics-exporter` exits while another process creates a queue, both
+block for good, and with them every later open of `/dev/kfd`, queue ioctl and
+GPU process exit on the node. Hit once on the MI355X node with 24 concurrent
+loops of short HIP processes. Signs: load average climbing with idle CPUs,
+unkillable processes in state `D`, and `task ... blocked for more than 122
+seconds` in the kernel log with `set_perfcount` and `init_mqd` in the traces.
+Only a reboot clears it. Avoid heavy churn of HIP processes on a node whose
+exporter profiles the GPUs, or disable the exporter's profiler metrics.
+Platform limitation (driver).
 
 ### Interop packages
 
@@ -364,6 +457,8 @@ Expected to fail:
 - `geometry/test_bvh` `test_bvh_aabb` — intermittent; lost writes (section 2).
 - `test_optim` `example_fluid_checkpoint` — intermittent wedge in
   `capture_launch` (section 3).
+- `test_grad` `test_mesh_grad` on the GPU — intermittent hang in `hipFree`
+  on an MI355X virtual function (lost GPU completion signal, section 3).
 
 Skipped on HIP:
 
@@ -380,6 +475,8 @@ Skipped on HIP:
 - `tile/test_tile_fft`, `test_tile_solve`, `test_tile_mlp` MathDx cases —
   libmathdx is CUDA-only.
 - `cuda/test_texture` mipmapped-array tests — error 801.
+- `cuda/test_texture`, `cuda/test_texture_compiler` on devices without image
+  support (CDNA) — no textures (section 3).
 - `test_large` `test_large_launch_large_kernel` — grid-size limit.
 - `test_atomic_cas` spinlock tests — lockstep wavefronts.
 - `test_cuda_profiler` start/stop — `hipProfilerStart` unsupported.

@@ -574,6 +574,17 @@ def create_test_func(func, device, check_output, device_check=None, enable_cpu_b
     return test_func
 
 
+def skip_without_texture_support(test, device):
+    """Skip on a device that cannot create textures.
+
+    HIP devices without image support, which are the CDNA parts such as gfx942 and gfx950, fail texture
+    creation with "operation not supported" (error 801); see ``Device.is_texture_supported``. For use as
+    the ``device_check`` of :func:`add_function_test`.
+    """
+    if device is not None and not wp.get_device(device).is_texture_supported:
+        test.skipTest("textures are not supported on this device")
+
+
 def skip_test_func(self):
     # A function to use so we can tell unittest that the test was skipped.
     self.skipTest("No suitable devices to run the test.")

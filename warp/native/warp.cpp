@@ -1102,6 +1102,7 @@ WP_API int wp_cuda_device_get_concurrent_managed_access_supported(int ordinal) {
 WP_API int wp_cuda_pointer_get_memory_kind(void* context, void* ptr) { return WP_MEMORY_KIND_UNKNOWN; }
 WP_API int wp_cuda_set_memory_coarse_grain(void* context, void* ptr, size_t size) { return 0; }
 WP_API int wp_cuda_device_is_mempool_supported(int ordinal) { return 0; }
+WP_API int wp_cuda_device_is_texture_supported(int ordinal) { return 0; }
 WP_API int wp_cuda_device_is_ipc_supported(int ordinal) { return 0; }
 WP_API int wp_cuda_device_set_mempool_release_threshold(int ordinal, uint64_t threshold) { return 0; }
 WP_API uint64_t wp_cuda_device_get_mempool_release_threshold(int ordinal) { return 0; }

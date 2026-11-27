@@ -114,6 +114,7 @@ def default_suite(test_loader: unittest.TestLoader = unittest.defaultTestLoader)
     from warp.tests.cuda.test_sync_errors import TestSyncErrors
     from warp.tests.cuda.test_texture import TestTexture
     from warp.tests.cuda.test_texture_compiler import TestTextureCompiler
+    from warp.tests.cuda.test_tile_rocwmma import TestTileRocWMMA
     from warp.tests.cuda.test_unified_memory import TestUnifiedMemory
     from warp.tests.deterministic.test_deterministic_backward import TestDeterministicBackward
     from warp.tests.deterministic.test_deterministic_counter import TestDeterministicCounter
@@ -498,6 +499,7 @@ def default_suite(test_loader: unittest.TestLoader = unittest.defaultTestLoader)
         TestTileMatmul,
         TestTileMatmulNoMathDx,
         TestTileMatmulStrides,
+        TestTileRocWMMA,
         TestTileOOB,
         TestTilePrint,
         TestTileReduce,

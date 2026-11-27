@@ -3906,6 +3906,11 @@ class ModuleBuilder:
         if self.options.get("hip_fast_fp_atomics"):
             type_defines += "#define WP_HIP_FAST_FP_ATOMICS 1\n"
 
+        # Keep tile_matmul on the scalar GEMM where it would use rocWMMA (see tile.h).
+        # Inert wherever the rocWMMA path is not compiled in.
+        if not self.options.get("hip_tile_rocwmma", True):
+            type_defines += "#define WP_TILE_DISABLE_ROCWMMA 1\n"
+
         # add headers
         #
         # The extra preamble goes *after* Warp's module header so external headers can use
@@ -4266,6 +4271,7 @@ class Module:
             "fast_math": False,
             "fuse_fp": True,
             "hip_fast_fp_atomics": warp.config.hip_fast_fp_atomics,
+            "hip_tile_rocwmma": True,
             "lineinfo": warp.config.lineinfo,
             "cuda_output": None,  # supported values: "ptx", "cubin", or None (automatic)
             "mode": None,
@@ -4767,6 +4773,11 @@ class Module:
         else:
             arch_label = f"sm{final_arch}{arch_suffix}"
 
+        # A HIP arch suffix can carry target features ("gfx950:sramecc+:xnack-", as CDNA devices report).
+        # A colon is not usable in a file name everywhere, and the API-capture format rejects it in the
+        # binary and source file names it records, so the file name spells it "_".
+        arch_label = arch_label.replace(":", "_")
+
         if use_ptx:
             output_name = f"{module_name_short}.{arch_label}.ptx"
         else:
@@ -4786,7 +4797,7 @@ class Module:
         module_name = self.get_module_identifier(block_dim=options["block_dim"])
         output_name = os.path.basename(binary_path)
         # CUDA binaries carry an optional a/f suffix; HIP binaries carry the gfx name, which may include
-        # target features ("gfx90a:sramecc+:xnack-") and has no variants
+        # target features (spelled "gfx90a_sramecc+_xnack-" in the file name) and has no variants
         variant = re.fullmatch(rf"{re.escape(module_name)}\.sm{output_arch}(a|f|gfx[^.]+)?\.(ptx|cubin)", output_name)
         source_path = os.path.join(os.path.dirname(binary_path), module_name + ".cu")
         try:
@@ -6256,6 +6267,9 @@ class Device:
             generate CUDA binary files (cubin) for this device's architecture. ``False`` for CPU devices.
         is_mempool_supported (bool): Indicates whether the device supports using the ``cuMemAllocAsync`` and
             ``cuMemPool`` family of APIs for stream-ordered memory allocations. ``False`` for CPU devices.
+        is_texture_supported (bool): Indicates whether :class:`warp.Texture1D`, :class:`warp.Texture2D` and
+            :class:`warp.Texture3D` can be created on the device. ``True`` for CPU and CUDA devices; ``False``
+            for HIP devices without image support, which are the CDNA (Instinct) parts such as gfx942 and gfx950.
         is_ipc_supported (Optional[bool]): Indicates whether the device supports IPC.
 
             - ``True`` if supported.
@@ -6310,6 +6324,7 @@ class Device:
             self.is_concurrent_managed_access_supported = False
             self.is_mempool_supported = False
             self.is_mempool_enabled = False
+            self.is_texture_supported = True
             self.is_ipc_supported = False  # TODO: Support IPC for CPU arrays
             self.is_cubin_supported = False
             self.uuid = None
@@ -6351,6 +6366,7 @@ class Device:
                 runtime.core.wp_cuda_device_get_concurrent_managed_access_supported(ordinal) > 0
             )
             self.is_mempool_supported = runtime.core.wp_cuda_device_is_mempool_supported(ordinal) > 0
+            self.is_texture_supported = runtime.core.wp_cuda_device_is_texture_supported(ordinal) > 0
             if platform.system() == "Linux":
                 # Use None when IPC support cannot be determined
                 ipc_support_api_query = runtime.core.wp_cuda_device_is_ipc_supported(ordinal)
@@ -8514,6 +8530,8 @@ class Runtime:
             self.core.wp_cuda_set_memory_coarse_grain.restype = ctypes.c_int
             self.core.wp_cuda_device_is_mempool_supported.argtypes = [ctypes.c_int]
             self.core.wp_cuda_device_is_mempool_supported.restype = ctypes.c_int
+            self.core.wp_cuda_device_is_texture_supported.argtypes = [ctypes.c_int]
+            self.core.wp_cuda_device_is_texture_supported.restype = ctypes.c_int
             self.core.wp_cuda_device_is_ipc_supported.argtypes = [ctypes.c_int]
             self.core.wp_cuda_device_is_ipc_supported.restype = ctypes.c_int
             self.core.wp_cuda_device_set_mempool_release_threshold.argtypes = [ctypes.c_int, ctypes.c_uint64]

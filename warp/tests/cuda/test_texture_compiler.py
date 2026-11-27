@@ -21,7 +21,14 @@ import unittest
 import numpy as np
 
 import warp as wp
-from warp.tests.unittest_utils import add_function_test, get_selected_cuda_test_devices
+from warp.tests import unittest_utils
+from warp.tests.unittest_utils import get_selected_cuda_test_devices, skip_without_texture_support
+
+
+def add_function_test(cls, name, func, devices=None, **kwargs):
+    # every test in this module creates a texture on its device
+    kwargs.setdefault("device_check", skip_without_texture_support)
+    unittest_utils.add_function_test(cls, name, func, devices=devices, **kwargs)
 
 
 @wp.struct

@@ -45,6 +45,19 @@ extern "C" WP_API int _wp_isinf(double);
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(__HIP_DEVICE_COMPILE__) || defined(__HIPCC_RTC__)
+// A HIP kernel compile takes these from the host C library. glibc's <math.h> defines the
+// classification functions as function-like macros when it is not included through libstdc++'s
+// <cmath>, and those macros break the vec_t/mat_t overloads of isfinite(), isnan() and isinf().
+// Drop them as <cmath> does; HIP's device math headers declare the float and double functions.
+#undef fpclassify
+#undef isfinite
+#undef isinf
+#undef isnan
+#undef isnormal
+#undef signbit
+#endif
+
 #else
 
 // These definitions are taken from Jitify: https://github.com/NVIDIA/jitify

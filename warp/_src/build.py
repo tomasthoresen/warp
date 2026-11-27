@@ -115,6 +115,9 @@ def _build_hip_aot(cu_path, output_path, arch_suffix, inc_dirs, config, optimiza
     rocm_path = os.environ.get("ROCM_PATH", "/opt/rocm")
     hipcc = os.path.join(rocm_path, "bin", "hipcc")
     if not os.path.exists(hipcc):
+        # e.g. the TheRock pip wheels: hipcc sits next to the headers that were found
+        hipcc = os.path.join(os.path.dirname(_hip_system_include_dirs()[0]), "bin", "hipcc")
+    if not os.path.exists(hipcc):
         hipcc = shutil.which("hipcc") or hipcc
 
     last = None
@@ -135,6 +138,71 @@ def _build_hip_aot(cu_path, output_path, arch_suffix, inc_dirs, config, optimiza
 
     tail = (last.stderr or last.stdout or "")[-2000:] if last is not None else ""
     raise Exception(f"HIP AOT (hipcc) build failed with code {getattr(last, 'returncode', '?')}:\n{tail}")
+
+
+_hip_system_include_dirs_cache = None
+
+
+def _hip_system_include_dirs() -> list[str]:
+    """Return the ROCm include directory and one compiler header directory for HIP kernel compiles.
+
+    HIPRTC bundles neither the HIP runtime headers (``<hip/hip_runtime.h>``) nor the freestanding C
+    headers (``<stddef.h>``, ``<float.h>``, ...), so both are passed explicitly.
+
+    The ROCm root is the first of ``ROCM_PATH`` / ``ROCM_HOME`` / ``HIP_PATH``, ``/opt/rocm``, the
+    TheRock pip wheels (the ``_rocm_sdk_devel`` / ``_rocm_sdk_core`` packages, which install the SDK
+    into site-packages and leave ``ROCM_PATH`` unset) and the directory above a ``hipcc`` on ``PATH``
+    that has HIP headers.
+
+    The compiler headers are GCC's when the Debian/Ubuntu multiarch directory exists, otherwise the
+    resource directory of the clang that ships with that ROCm root. Exactly one such directory is
+    returned: with two clang resource directories on the include path (the devel and core wheels
+    each carry one) ``<stdint.h>`` no longer resolves under HIPRTC.
+    """
+    global _hip_system_include_dirs_cache
+    if _hip_system_include_dirs_cache is not None:
+        return _hip_system_include_dirs_cache
+
+    import glob  # noqa: PLC0415
+    import importlib.util  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+
+    roots = [os.environ.get(var) for var in ("ROCM_PATH", "ROCM_HOME", "HIP_PATH")]
+    roots.append("/opt/rocm")
+    for package in ("_rocm_sdk_devel", "_rocm_sdk_core"):
+        try:
+            spec = importlib.util.find_spec(package)
+        except (ImportError, ValueError):
+            spec = None
+        if spec is not None and spec.submodule_search_locations:
+            roots.extend(spec.submodule_search_locations)
+    hipcc = shutil.which("hipcc")
+    if hipcc:
+        roots.append(os.path.dirname(os.path.dirname(os.path.realpath(hipcc))))
+    roots = [root for root in roots if root and os.path.isdir(os.path.join(root, "include", "hip"))]
+
+    rocm_include = os.path.join(roots[0], "include") if roots else "/opt/rocm/include"
+
+    def version_key(path):
+        return [int(part) for part in os.path.basename(os.path.dirname(path)).split(".") if part.isdigit()]
+
+    compiler_include = None
+    gcc_includes = sorted(glob.glob("/usr/lib/gcc/x86_64-linux-gnu/*/include"), key=version_key)
+    if gcc_includes:
+        compiler_include = gcc_includes[-1]
+    else:
+        for root in roots:
+            clang_includes = sorted(
+                glob.glob(os.path.join(root, "lib", "llvm", "lib", "clang", "*", "include")), key=version_key
+            )
+            if clang_includes:
+                compiler_include = clang_includes[-1]
+                break
+    if compiler_include is None:
+        compiler_include = "/usr/lib/gcc/x86_64-linux-gnu/13/include"
+
+    _hip_system_include_dirs_cache = [rocm_include, compiler_include]
+    return _hip_system_include_dirs_cache
 
 
 # builds cuda source to PTX or CUBIN using NVRTC (output type determined by output_path extension)
@@ -163,16 +231,11 @@ def build_cuda(
     cu_path_bytes = cu_path.encode("utf-8")
     program_name_bytes = os.path.basename(cu_path).encode("utf-8")
     inc_path = os.path.join(warp_home, "native").encode("utf-8")
-    # AMD HIP: hipRTC needs system headers (float.h, stddef.h, etc.)
-    import glob
-    gcc_includes = glob.glob("/usr/lib/gcc/x86_64-linux-gnu/*/include")
-    hip_extra_includes = gcc_includes[-1] if gcc_includes else "/usr/lib/gcc/x86_64-linux-gnu/13/include"
-
     # HIP (arch=0, arch_suffix like "gfx1151"): route very large modules to the
     # out-of-process hipcc AOT path, which sidesteps the in-process HIPRTC crash.
     is_hip = arch == 0 and arch_suffix and arch_suffix.startswith("gfx")
     if is_hip and not llvm_cuda and len(src) > WP_HIP_HIPRTC_MAX_SRC_BYTES:
-        inc_dirs = [os.path.join(warp_home, "native"), "/opt/rocm/include", hip_extra_includes]
+        inc_dirs = [os.path.join(warp_home, "native"), *_hip_system_include_dirs()]
         _build_hip_aot(
             cu_path, output_path, arch_suffix, inc_dirs, config, optimization_level, fast_math, fuse_fp, lineinfo
         )
@@ -181,7 +244,7 @@ def build_cuda(
     extra_cuda_include_dirs = _get_extra_include_dir_bytes(extra_include_dirs)
     if is_hip:
         # hipRTC needs the ROCm and GCC system include paths (<hip/hip_runtime.h>, <stddef.h>, ...)
-        extra_cuda_include_dirs = extra_cuda_include_dirs + [b"/opt/rocm/include", hip_extra_includes.encode("utf-8")]
+        extra_cuda_include_dirs = extra_cuda_include_dirs + [d.encode("utf-8") for d in _hip_system_include_dirs()]
     num_cuda_include_dirs = len(extra_cuda_include_dirs)
     cuda_include_dirs = (
         (ctypes.c_char_p * num_cuda_include_dirs)(*extra_cuda_include_dirs) if num_cuda_include_dirs else None
@@ -266,10 +329,6 @@ def build_cpu(
         src = cpp.read()
     cpp_path = cpp_path.encode("utf-8")
     inc_path = os.path.join(warp_home, "native").encode("utf-8")
-    # AMD HIP: hipRTC needs system headers (float.h, stddef.h, etc.)
-    import glob
-    gcc_includes = glob.glob("/usr/lib/gcc/x86_64-linux-gnu/*/include")
-    hip_extra_includes = gcc_includes[-1] if gcc_includes else "/usr/lib/gcc/x86_64-linux-gnu/13/include"
     obj_path = obj_path.encode("utf-8")
 
     flags_list = extra_flags.split()

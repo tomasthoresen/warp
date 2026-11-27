@@ -10,11 +10,18 @@ import numpy as np
 
 import warp as wp
 from warp._src.texture import texture1d_t, texture2d_t, texture3d_t
+from warp.tests import unittest_utils
 from warp.tests.unittest_utils import (
-    add_function_test,
     get_selected_cuda_test_devices,
     get_test_devices,
+    skip_without_texture_support,
 )
+
+
+def add_function_test(cls, name, func, devices=None, **kwargs):
+    # every test in this module creates a texture on its device
+    kwargs.setdefault("device_check", skip_without_texture_support)
+    unittest_utils.add_function_test(cls, name, func, devices=devices, **kwargs)
 
 # ============================================================================
 # 1D Texture Kernels
@@ -953,6 +960,17 @@ def test_texture2d_cuda_array_wraps_non_mipmapped(test, device):
     test.assertEqual(wrapped.num_channels, 4)
     test.assertEqual(wrapped.dtype, wp.float32)
     test.assertFalse(wrapped.is_mipmapped)
+
+
+def test_texture_support_query(test, device):
+    """Verify Device.is_texture_supported tells whether a texture can be created on the device."""
+    data = np.zeros((4, 4), dtype=np.float32)
+    if wp.get_device(device).is_texture_supported:
+        tex = wp.Texture2D(data, device=device)
+        test.assertEqual(tex.width, 4)
+    else:
+        with test.assertRaisesRegex(RuntimeError, "Textures are not supported on device"):
+            wp.Texture2D(data, device=device)
 
 
 def _skip_without_mipmap_support(test, device):
@@ -4688,6 +4706,11 @@ class TestTexture(unittest.TestCase):
 # Register tests - textures work on both CPU and CUDA devices
 cuda_devices = get_selected_cuda_test_devices()
 all_devices = get_test_devices()
+
+# Runs on every device, including those without texture support
+unittest_utils.add_function_test(
+    TestTexture, "test_texture_support_query", test_texture_support_query, devices=all_devices
+)
 
 # Core texture tests - run on all devices (CPU + CUDA)
 add_function_test(

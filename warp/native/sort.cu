@@ -610,35 +610,62 @@ void segmented_sort_pairs_device(
 {
     ContextGuard guard(context);
 
-    cub::DoubleBuffer<float> d_keys(keys, keys + n);
-    cub::DoubleBuffer<int> d_values(values, values + n);
-
     CUstream stream = static_cast<CUstream>(wp_cuda_stream_get_current());
     auto segment_offsets = make_validated_segment_offsets(segment_start_indices, segment_end_indices, n);
     size_t temp_size
         = segmented_sort_temp_size(WP_CURRENT_CONTEXT, n, num_segments, segment_start_indices, segment_end_indices);
 
+#if defined(__HIP_PLATFORM_AMD__)
+    // rocPRIM's segmented radix sort writes only the elements inside a valid segment, and the whole
+    // alternate buffer is copied back below. With the caller's scratch half as the alternate buffer,
+    // elements outside every valid segment come back as whatever the scratch half held, and the scratch
+    // half is modified even when every segment is empty. Sort through a temporary alternate buffer
+    // seeded with the input instead, which gives what CUB gives: elements outside the segments keep
+    // their values and the caller's scratch half is not touched.
+    const size_t scratch_bytes = (temp_size + 255) & ~size_t(255);
+    const size_t alt_keys_bytes = (sizeof(float) * size_t(n) + 255) & ~size_t(255);
+    const size_t alt_values_bytes = sizeof(int) * size_t(n);
+    const size_t acquire_size = scratch_bytes + alt_keys_bytes + alt_values_bytes;
+#else
+    const size_t acquire_size = temp_size;
+#endif
+
     TempBuffer temp;
-    if (!acquire_temp_buffer(temp_size, temp)) {
+    if (!acquire_temp_buffer(acquire_size, temp)) {
         wp::set_error_string("Warp sort error: Failed to acquire segmented sort buffer");
         return;
     }
 
+#if defined(__HIP_PLATFORM_AMD__)
+    float* alt_keys = reinterpret_cast<float*>(static_cast<char*>(temp.mem) + scratch_bytes);
+    int* alt_values = reinterpret_cast<int*>(static_cast<char*>(temp.mem) + scratch_bytes + alt_keys_bytes);
+    wp_memcpy_d2d(WP_CURRENT_CONTEXT, alt_keys, keys, sizeof(float) * n);
+    wp_memcpy_d2d(WP_CURRENT_CONTEXT, alt_values, values, sizeof(int) * n);
+    cub::DoubleBuffer<float> d_keys(keys, alt_keys);
+    cub::DoubleBuffer<int> d_values(values, alt_values);
+    size_t sort_temp_bytes = temp_size;
+#else
+    cub::DoubleBuffer<float> d_keys(keys, keys + n);
+    cub::DoubleBuffer<int> d_values(values, values + n);
+    size_t sort_temp_bytes = temp.size;
+#endif
+
     // sort
     check_cuda(
         cub::DeviceSegmentedRadixSort::SortPairs(
-            temp.mem, temp.size, d_keys, d_values, n, num_segments, segment_offsets.first, segment_offsets.second, 0,
-            32, stream
+            temp.mem, sort_temp_bytes, d_keys, d_values, n, num_segments, segment_offsets.first,
+            segment_offsets.second, 0, 32, stream
         )
     );
-
-    release_temp_buffer(temp);
 
     if (d_keys.Current() != keys)
         wp_memcpy_d2d(WP_CURRENT_CONTEXT, keys, d_keys.Current(), sizeof(float) * n);
 
     if (d_values.Current() != values)
         wp_memcpy_d2d(WP_CURRENT_CONTEXT, values, d_values.Current(), sizeof(int) * n);
+
+    // released after the copy-back: on HIP the alternate buffers live in temp
+    release_temp_buffer(temp);
 }
 
 void wp_segmented_sort_pairs_float_device(
@@ -668,35 +695,62 @@ void segmented_sort_pairs_device(
 {
     ContextGuard guard(context);
 
-    cub::DoubleBuffer<int> d_keys(keys, keys + n);
-    cub::DoubleBuffer<int> d_values(values, values + n);
-
     CUstream stream = static_cast<CUstream>(wp_cuda_stream_get_current());
     auto segment_offsets = make_validated_segment_offsets(segment_start_indices, segment_end_indices, n);
     size_t temp_size
         = segmented_sort_temp_size(WP_CURRENT_CONTEXT, n, num_segments, segment_start_indices, segment_end_indices);
 
+#if defined(__HIP_PLATFORM_AMD__)
+    // rocPRIM's segmented radix sort writes only the elements inside a valid segment, and the whole
+    // alternate buffer is copied back below. With the caller's scratch half as the alternate buffer,
+    // elements outside every valid segment come back as whatever the scratch half held, and the scratch
+    // half is modified even when every segment is empty. Sort through a temporary alternate buffer
+    // seeded with the input instead, which gives what CUB gives: elements outside the segments keep
+    // their values and the caller's scratch half is not touched.
+    const size_t scratch_bytes = (temp_size + 255) & ~size_t(255);
+    const size_t alt_keys_bytes = (sizeof(int) * size_t(n) + 255) & ~size_t(255);
+    const size_t alt_values_bytes = sizeof(int) * size_t(n);
+    const size_t acquire_size = scratch_bytes + alt_keys_bytes + alt_values_bytes;
+#else
+    const size_t acquire_size = temp_size;
+#endif
+
     TempBuffer temp;
-    if (!acquire_temp_buffer(temp_size, temp)) {
+    if (!acquire_temp_buffer(acquire_size, temp)) {
         wp::set_error_string("Warp sort error: Failed to acquire segmented sort buffer");
         return;
     }
 
+#if defined(__HIP_PLATFORM_AMD__)
+    int* alt_keys = reinterpret_cast<int*>(static_cast<char*>(temp.mem) + scratch_bytes);
+    int* alt_values = reinterpret_cast<int*>(static_cast<char*>(temp.mem) + scratch_bytes + alt_keys_bytes);
+    wp_memcpy_d2d(WP_CURRENT_CONTEXT, alt_keys, keys, sizeof(int) * n);
+    wp_memcpy_d2d(WP_CURRENT_CONTEXT, alt_values, values, sizeof(int) * n);
+    cub::DoubleBuffer<int> d_keys(keys, alt_keys);
+    cub::DoubleBuffer<int> d_values(values, alt_values);
+    size_t sort_temp_bytes = temp_size;
+#else
+    cub::DoubleBuffer<int> d_keys(keys, keys + n);
+    cub::DoubleBuffer<int> d_values(values, values + n);
+    size_t sort_temp_bytes = temp.size;
+#endif
+
     // sort
     check_cuda(
         cub::DeviceSegmentedRadixSort::SortPairs(
-            temp.mem, temp.size, d_keys, d_values, n, num_segments, segment_offsets.first, segment_offsets.second, 0,
-            32, stream
+            temp.mem, sort_temp_bytes, d_keys, d_values, n, num_segments, segment_offsets.first,
+            segment_offsets.second, 0, 32, stream
         )
     );
-
-    release_temp_buffer(temp);
 
     if (d_keys.Current() != keys)
         wp_memcpy_d2d(WP_CURRENT_CONTEXT, keys, d_keys.Current(), sizeof(int) * n);
 
     if (d_values.Current() != values)
         wp_memcpy_d2d(WP_CURRENT_CONTEXT, values, d_values.Current(), sizeof(int) * n);
+
+    // released after the copy-back: on HIP the alternate buffers live in temp
+    release_temp_buffer(temp);
 }
 
 void wp_segmented_sort_pairs_int_device(

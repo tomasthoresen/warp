@@ -117,6 +117,22 @@ template <int BlockDim> inline void tile_sync()
 
 #endif
 
+// rocWMMA is ROCm's header-only C++ interface to the matrix instructions. tile_matmul uses its fp32
+// 16x16x4 MFMA (see scalar_matmul in tile_matmul.h), which exists only on the CDNA parts rocWMMA
+// supports (gfx908, gfx90a, gfx942, gfx950). The RDNA matrix instructions take no fp32 input, so
+// the header is left out there. It compiles under both hipcc and HIPRTC; where the ROCm install has
+// no rocWMMA the fast path is simply absent. WP_TILE_DISABLE_ROCWMMA (the "hip_tile_rocwmma" module
+// option set to False) leaves it out as well, so the same kernel can be built on the scalar GEMM.
+#if defined(__HIP_DEVICE_COMPILE__) && !defined(WP_ENABLE_ROCWMMA) && !defined(WP_TILE_DISABLE_ROCWMMA)                 \
+    && (defined(__gfx908__) || defined(__gfx90a__) || defined(__gfx942__) || defined(__gfx950__))
+#if defined(__has_include)
+#if __has_include(<rocwmma/rocwmma.hpp>)
+#include <rocwmma/rocwmma.hpp>
+#define WP_ENABLE_ROCWMMA 1
+#endif
+#endif
+#endif
+
 #define WP_USE_REGISTER_GEMM 0
 
 // Type trait to detect null function placeholder (int literal 0).
