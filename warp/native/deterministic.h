@@ -56,8 +56,18 @@ namespace deterministic {
 // before this path is used. After a 64-bit radix sort, records targeting the same
 // destination are grouped together and ordered by thread ID, giving a
 // deterministic reduction order.
+#if defined(__HIP_DEVICE_COMPILE__)
+// HIP: keep the record write out of line. A backward kernel can record into many
+// gradient buffers; with every call site inlined, hipRTC at -O3 has produced code
+// that accesses a null address (seen with 17 buffers, not at -O2 or below).
+#define WP_DET_SCATTER_NOINLINE __attribute__((noinline))
+#else
+#define WP_DET_SCATTER_NOINLINE
+#endif
+
 template <typename T>
-inline CUDA_CALLABLE void scatter(det_ctx& ctx, det_scatter_buf_t<T>& buf, int dest_flat_idx, T value)
+WP_DET_SCATTER_NOINLINE inline CUDA_CALLABLE void
+scatter(det_ctx& ctx, det_scatter_buf_t<T>& buf, int dest_flat_idx, T value)
 {
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     int slot = atomicAdd(buf.count, 1);
